@@ -25,8 +25,11 @@ LIVE_INTERVAL = 15
 HISTORY = 60
 NAME_WORKERS = 6
 
-COLUMN_GAP = 124
-ROW_GAP = 88
+COLUMN_GAP = 168
+ROW_GAP = 104
+#: Width of a hop's name and address under it; narrower than a column, so
+#: neighbours' labels and the latency pills between them never overlap.
+LABEL_WIDTH = 130
 #: The graph is never shrunk below this to fit; past it, scroll.
 MIN_FIT_SCALE = 0.7
 NODE_RADIUS = 17
@@ -39,6 +42,7 @@ BLUE = "#087dff"
 HEALTH_COLORS = {"ok": GREEN, "partial": AMBER, "down": RED}
 HEALTH_TEXT = {"ok": "Reachable", "partial": "Partly reachable", "down": "Unreachable"}
 HEALTH_FILLS = {"ok": "#dcf6e4", "partial": "#fef3c7", "down": "#fde2e2"}
+LEVEL_COLORS = {netpath.OK: GREEN, netpath.WARN: AMBER, netpath.CRIT: RED}
 
 LIGHT = dict(bg="#f6f7f9", surface="#ffffff", ink="#16191f", muted="#5f6673", border="#e3e5e9")
 
@@ -159,7 +163,8 @@ class NodeItem(QGraphicsObject):
         return QRectF(-size / 2, -size / 2, size, size)
 
     def boundingRect(self) -> QRectF:
-        return QRectF(-70, -END_SIZE / 2 - 4, 140, END_SIZE + 44)
+        half = LABEL_WIDTH / 2
+        return QRectF(-half, -END_SIZE / 2 - 4, LABEL_WIDTH, END_SIZE + 44)
 
     def shape(self) -> QPainterPath:
         path = QPainterPath()
@@ -197,12 +202,14 @@ class NodeItem(QGraphicsObject):
         painter.setFont(font)
         painter.setPen(QColor(self.colors["ink"]))
         metrics = painter.fontMetrics()
-        title = metrics.elidedText(self.title, Qt.TextElideMode.ElideRight, 136)
-        painter.drawText(QRectF(-70, top, 140, 16), Qt.AlignmentFlag.AlignHCenter, title)
+        half = LABEL_WIDTH / 2
+        title = metrics.elidedText(self.title, Qt.TextElideMode.ElideRight, LABEL_WIDTH - 4)
+        painter.drawText(QRectF(-half, top, LABEL_WIDTH, 16), Qt.AlignmentFlag.AlignHCenter, title)
         font.setBold(False)
         painter.setFont(font)
         painter.setPen(QColor(self.colors["muted"]))
-        painter.drawText(QRectF(-70, top + 15, 140, 16), Qt.AlignmentFlag.AlignHCenter, self.subtitle)
+        painter.drawText(QRectF(-half, top + 15, LABEL_WIDTH, 16), Qt.AlignmentFlag.AlignHCenter,
+                         self.subtitle)
 
 
 class PathView(QGraphicsView):
@@ -298,6 +305,9 @@ class NetPathWindow(QWidget):
         self._probe = probe
         self._source = source
         self.sweeps: list[Sweep] = []
+        #: Each trace's own graph, side by side with sweeps: what's usual for
+        #: a hop or link is taken from the other traces.
+        self.graphs: list[PathGraph] = []
         self.shown = -1  # index into sweeps of the trace on screen
         self._follow = True  # show each new trace as it comes
         self.names: dict[str, str] = {}
@@ -348,8 +358,9 @@ class NetPathWindow(QWidget):
             button.clicked.connect(slot)
             zoom.addWidget(button)
         zoom.addStretch(1)
-        self.legend = _label("Circle = hop, numbered by distance · line width = share of "
-                             "probe flows · dashed = no reply", "muted")
+        self.legend = _label("Circle = hop, numbered by distance · width = share of probe flows · "
+                             "amber/red = slower than usual or flows lost · dashed = no reply",
+                             "muted")
         zoom.addWidget(self.legend)
         graph_side = QWidget()
         graph_layout = QVBoxLayout(graph_side)
@@ -439,8 +450,10 @@ class NetPathWindow(QWidget):
 
     def add_sweep(self, result: Sweep) -> None:
         self.sweeps.append(result)
+        self.graphs.append(netpath.build_graph([result], self._ip))
         if len(self.sweeps) > HISTORY:
             del self.sweeps[0]
+            del self.graphs[0]
             self.shown -= 1
         self.history.healths = [netpath.health(s) for s in self.sweeps]
         status = self._summary(result)
@@ -470,7 +483,7 @@ class NetPathWindow(QWidget):
         self.history_text.setText(f"Showing {stamp}" + ("" if self._follow else " · click the "
                                                        "last block to follow live"))
         self._set_health(netpath.health(result))
-        self.render(netpath.build_graph([result], self._ip))
+        self.render(self.graphs[index])
 
     def _set_health(self, health: str | None) -> None:
         if health is None:
@@ -497,11 +510,12 @@ class NetPathWindow(QWidget):
             path.cubicTo(QPointF(start.x() + bend, start.y()), QPointF(end.x() - bend, end.y()), end)
             share = len(edge.flows) / max(1, graph.flows)
             silent = graph.nodes[edge.parent].silent or graph.nodes[edge.child].silent
+            level, _ = self.edge_condition(graph, edge)
             if edge.unknown or silent:
-                pen = QPen(muted, 2, Qt.PenStyle.DashLine)
+                color = muted if level == netpath.OK else QColor(LEVEL_COLORS[level])
+                pen = QPen(color, 2, Qt.PenStyle.DashLine)
             else:
-                color = RED if graph.nodes[edge.child].unreachable else GREEN
-                pen = QPen(QColor(color), 2 + 5 * share)
+                pen = QPen(QColor(LEVEL_COLORS[level]), 2 + 5 * share)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             item = scene.addPath(path, pen)
             item.setZValue(0)
@@ -514,15 +528,14 @@ class NetPathWindow(QWidget):
                 name, address = self._source
                 item = NodeItem(key, "source", BLUE, "PC", name, address, self.colors)
             elif key == DESTINATION:
-                health = ("ok" if graph.reached == graph.flows else "partial" if graph.reached
-                          else "down")
-                item = NodeItem(key, "destination", HEALTH_COLORS[health], "◎",
+                level, _ = self.node_condition(graph, key)
+                item = NodeItem(key, "destination", LEVEL_COLORS[level], "◎",
                                 self._title, self._ip, self.colors, dashed=not reached)
             elif node.silent:
                 item = NodeItem(key, "router", self.colors["muted"], str(node.ttl), "No reply",
                                 "", self.colors, dashed=True)
             else:
-                ring = RED if node.unreachable else GREEN
+                ring = LEVEL_COLORS[self.node_condition(graph, key)[0]]
                 name = self.names.get(node.address, "")
                 item = NodeItem(key, "router", ring, str(node.ttl), name or node.address,
                                 node.address if name else "", self.colors)
@@ -537,6 +550,58 @@ class NetPathWindow(QWidget):
             self._fitted = True
             self.view.fit()
         self._show_details()
+
+    # -- how healthy each hop and link is -------------------------------------
+
+    def _others(self) -> list[PathGraph]:
+        """The traces other than the one on screen: what "usual" comes from."""
+        return [g for i, g in enumerate(self.graphs) if i != self.shown]
+
+    def usual_node_ms(self, key: str) -> float | None:
+        values = [g.nodes[key].latency()[1] for g in self._others()
+                  if key in g.nodes and g.nodes[key].latency() is not None]
+        return netpath.usual(values)
+
+    def usual_edge_ms(self, parent: str, child: str) -> float | None:
+        values = []
+        for g in self._others():
+            edge = g.edges.get((parent, child))
+            latency = g.edge_latency(edge) if edge is not None else None
+            if latency is not None:
+                values.append(latency)
+        return netpath.usual(values)
+
+    def node_condition(self, graph: PathGraph, key: str) -> tuple[str, list[str]]:
+        """(level, reasons) for a hop: the link into it slower than usual,
+        flows lost after it, or a router saying the host can't be reached.
+        Latency is judged on the link, not the hop's round trip, so a slow
+        link marks only the hop after it, not every hop beyond."""
+        node = graph.nodes[key]
+        if key == SOURCE or node.silent:
+            return netpath.OK, []
+        found: list[tuple[str, str]] = [
+            self.edge_condition(graph, edge) for edge in graph.edges.values()
+            if edge.child == key and not edge.unknown]
+        if key == DESTINATION:
+            share = 1 - graph.reached / graph.flows if graph.flows else 0.0
+            if share:
+                level = (netpath.CRIT if share >= netpath.CRIT_LOSS else netpath.WARN)
+                found.append((level, f"{graph.flows - graph.reached} of {graph.flows} "
+                                     "flows didn't reach it"))
+        else:
+            found.append(netpath.loss_level(node))
+            if node.unreachable:
+                found.append((netpath.CRIT, "Says the host can't be reached"))
+        reasons = [reason for _, reason in found if reason]
+        return netpath.worst(*(level for level, _ in found)), reasons
+
+    def edge_condition(self, graph: PathGraph, edge) -> tuple[str, str]:
+        """(level, reason) for a link: its latency above its usual; for the
+        guessed link to a host that wasn't reached, the loss where it broke."""
+        if edge.unknown:
+            return netpath.loss_level(graph.nodes[edge.parent])
+        return netpath.latency_level(graph.edge_latency(edge),
+                                     self.usual_edge_ms(edge.parent, edge.child), "Link latency")
 
     def _add_pill(self, scene: QGraphicsScene, at: QPointF, text: str) -> None:
         label = scene.addSimpleText(text)
@@ -611,6 +676,13 @@ class NetPathWindow(QWidget):
             ("Branch points", str(splits) if splits else "None: a single route"),
             ("Latency", format_range(end) if end else "—"),
         ]
+        problems = []
+        for key, node in sorted(graph.nodes.items(), key=lambda item: item[1].ttl):
+            level, reasons = self.node_condition(graph, key)
+            if level != netpath.OK:
+                where = self._title if key == DESTINATION else f"Hop {node.ttl} ({node.address})"
+                problems.append(f"{where}: {'; '.join(reasons)}")
+        rows.append(("Problems", "\n".join(problems[:4]) if problems else "None"))
         self._set_rows("Path overview", rows)
 
     def _details_for_node(self, graph: PathGraph, key: str) -> None:
@@ -626,7 +698,8 @@ class NetPathWindow(QWidget):
                     ("Reached", f"{graph.reached} of {graph.flows} probe flows"),
                     ("Hop", str(node.ttl) if node.rtts else "—"),
                     ("Latency", format_range(latency) if latency else "—"),
-                    ("Over", f"the last {len(self.sweeps)} trace{'s' * (len(self.sweeps) != 1)}")]
+                    ("Over", f"the last {len(self.sweeps)} trace{'s' * (len(self.sweeps) != 1)}"),
+                    ("Status", "\n".join(self.node_condition(graph, key)[1]) or "Normal")]
             self._set_rows(self._title, rows)
             return
         if node.silent:
@@ -653,8 +726,10 @@ class NetPathWindow(QWidget):
             rows.append(("Splits to", str(len(children)) + " next hops (load balancing)"))
         if len(parents) > 1:
             rows.append(("Joined from", f"{len(parents)} previous hops"))
-        if node.unreachable:
-            rows.append(("Status", "Says the host can't be reached"))
+        usual_ms = self.usual_node_ms(key)
+        if usual_ms is not None:
+            rows.append(("Usual", f"{usual_ms:.1f} ms (median of the other traces)"))
+        rows.append(("Status", "\n".join(self.node_condition(graph, key)[1]) or "Normal"))
         self._set_rows(self.names.get(node.address) or node.address, rows, code)
 
     def _on_name(self, address: str, name: str) -> None:

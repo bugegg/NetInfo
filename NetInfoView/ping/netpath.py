@@ -249,6 +249,8 @@ class Node:
     rtts: list[float] = field(default_factory=list)
     flows: set[int] = field(default_factory=set)
     unreachable: bool = False
+    #: Flows last seen here that never reached the host: where they were lost.
+    dropped: set[int] = field(default_factory=set)
 
     @property
     def silent(self) -> bool:
@@ -259,6 +261,10 @@ class Node:
         if not self.rtts:
             return None
         return min(self.rtts), sum(self.rtts) / len(self.rtts), max(self.rtts)
+
+    def loss(self) -> float:
+        """The share of the flows through this hop that were lost after it."""
+        return len(self.dropped) / len(self.flows) if self.flows else 0.0
 
 
 @dataclass
@@ -334,6 +340,8 @@ def build_graph(sweeps: list[Sweep], destination: str) -> PathGraph:
             if arrived:
                 reached += 1
             else:
+                nodes[previous].dropped.add(tag)
+                nodes[previous].flows.add(tag)
                 link(previous, DESTINATION, tag, unknown=True)
     total = sum(s.flows for s in sweeps)
     graph = PathGraph(nodes, edges, total, reached)
@@ -349,3 +357,49 @@ def health(s: Sweep) -> str:
     if reached == s.flows:
         return "ok"
     return "partial" if reached else "down"
+
+
+# -- how healthy a hop or link looks -----------------------------------------
+
+OK, WARN, CRIT = "ok", "warn", "crit"
+#: Latency above a hop's or link's usual that turns it amber, then red.
+WARN_MS = 50.0
+CRIT_MS = 150.0
+#: Share of the flows through a hop lost after it that turns it amber, then red.
+WARN_LOSS = 0.25
+CRIT_LOSS = 0.5
+_ORDER = {OK: 0, WARN: 1, CRIT: 2}
+
+
+def worst(*levels: str) -> str:
+    return max(levels, key=_ORDER.__getitem__, default=OK)
+
+
+def usual(values: list[float]) -> float | None:
+    """The median of `values`: what a hop or link normally measures."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def latency_level(now: float | None, normal: float | None,
+                  what: str = "Latency") -> tuple[str, str]:
+    """How far `now` is above `normal`, as a level and a reason ("" if fine)."""
+    if now is None or normal is None:
+        return OK, ""
+    excess = now - normal
+    level = CRIT if excess >= CRIT_MS else WARN if excess >= WARN_MS else OK
+    if level == OK:
+        return OK, ""
+    return level, f"{what} {now:.0f} ms, +{excess:.0f} ms over its usual {normal:.0f} ms"
+
+
+def loss_level(node: Node) -> tuple[str, str]:
+    """How many of the flows through `node` were lost after it."""
+    share = node.loss()
+    level = CRIT if share >= CRIT_LOSS else WARN if share >= WARN_LOSS else OK
+    if level == OK:
+        return OK, ""
+    return level, f"{len(node.dropped)} of {len(node.flows)} flows lost after this hop"
