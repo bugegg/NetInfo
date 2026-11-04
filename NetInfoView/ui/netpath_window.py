@@ -9,12 +9,10 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from PyQt6.QtCore import QCoreApplication, QPointF, QRectF, Qt, QThread, pyqtSignal
-from PyQt6.QtGui import (
-    QBrush, QColor, QFont, QGuiApplication, QKeySequence, QPainter, QPainterPath, QPen, QShortcut,
-)
+from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QCheckBox, QFrame, QGraphicsItem, QGraphicsObject, QGraphicsScene, QGraphicsView,
-    QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QSplitter, QVBoxLayout, QWidget,
+    QGridLayout, QHBoxLayout, QLabel, QPushButton, QSplitter, QVBoxLayout, QWidget,
 )
 
 from ..ping import hostname, netpath, whois
@@ -336,16 +334,9 @@ class NetPathWindow(QWidget):
         self.button = QPushButton("Trace Now")
         self.button.clicked.connect(self.start)
         heading.addWidget(self.button)
-        self.copy_button = QPushButton("Copy")
-        self.copy_button.setToolTip("Copy the selected hop's details, or the whole path as text")
-        self.copy_button.clicked.connect(self.copy_selection)
-        heading.addWidget(self.copy_button)
-        QShortcut(QKeySequence.StandardKey.Copy, self, self.copy_selection)
 
         self.view = PathView()
         self.view.scene().selectionChanged.connect(self._show_details)
-        self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.view.customContextMenuRequested.connect(self._context_menu)
         zoom = QHBoxLayout()
         zoom.setSpacing(4)
         for text, tip, slot in (("+", "Zoom in", lambda: self.view.zoom(1.25)),
@@ -681,97 +672,6 @@ class NetPathWindow(QWidget):
                 item.title, item.subtitle = self.names[node.address], node.address
                 item.update()
         self._show_details()
-
-    # -- copying ---------------------------------------------------------------
-
-    def selected_key(self) -> str | None:
-        return next((k for k, item in self.items.items() if item.isSelected()), None)
-
-    def copy_selection(self) -> str:
-        """The selected hop's details, or with none selected the whole path,
-        onto the clipboard; returns what was copied."""
-        key = self.selected_key()
-        text = self.details_text() if key is not None else self.path_text()
-        if text:
-            QGuiApplication.clipboard().setText(text)
-            self.status.setText("Copied " + ("the hop's details" if key is not None else "the path"))
-        return text
-
-    def details_text(self) -> str:
-        """The details panel as "Name: value" lines, under its title."""
-        lines = [self.details_title.text()]
-        grid = self.details_grid
-        for row in range(grid.rowCount()):
-            cells = []
-            for column in (0, 1):
-                item = grid.itemAtPosition(row, column)
-                widget = item.widget() if item is not None else None
-                if widget is not None and not isinstance(widget, QLabel):
-                    widget = next((w for w in widget.findChildren(QLabel) if w.text()), None)
-                cells.append(widget.text().replace("\n", " ") if widget is not None else "")
-            if any(cells):
-                lines.append(f"{cells[0]}: {cells[1]}")
-        return "\n".join(lines)
-
-    def path_text(self) -> str:
-        """The trace on screen as a table, one line per hop, like traceroute."""
-        graph = getattr(self, "graph", None)
-        if graph is None or not 0 <= self.shown < len(self.sweeps):
-            return ""
-        result = self.sweeps[self.shown]
-        stamp = datetime.fromtimestamp(result.started).strftime("%Y-%m-%d %H:%M:%S")
-        name, address = self._source
-        target = f"{self._title} ({self._ip})" if self._title != self._ip else self._ip
-        lines = [
-            f"Net Path to {target}, {stamp}",
-            f"From {name}{f' ({address})' if address else ''}: "
-            f"{graph.reached} of {graph.flows} probe flows reached the host",
-            "",
-            f"{'Hop':<4} {'Address':<16} {'Name':<32} {'Avg latency':>11}  Flows",
-        ]
-        rows = [n for k, n in graph.nodes.items() if k != SOURCE]
-        rows.sort(key=lambda n: (n.key == DESTINATION, n.ttl, -len(n.flows), n.address))
-        for node in rows:
-            if node.key == DESTINATION:
-                if not node.rtts:
-                    lines.append(f"{'-':<4} {self._ip:<16} (not reached)")
-                    continue
-                address, label = self._ip, self._title if self._title != self._ip else ""
-            elif node.silent:
-                address, label = "*", "No reply"
-            else:
-                address, label = node.address, self.names.get(node.address, "")
-            latency = node.latency()
-            average = f"{latency[1]:.1f} ms" if latency else ""
-            lines.append(f"{node.ttl:<4} {address:<16} {label[:32]:<32} {average:>11}  "
-                         f"{len(node.flows)}/{graph.flows}")
-        return "\n".join(lines)
-
-    def _context_menu(self, position) -> None:
-        item = self.view.itemAt(position)
-        while item is not None and not isinstance(item, NodeItem):
-            item = item.parentItem()
-        menu = QMenu(self)
-        if item is not None:
-            self.view.scene().clearSelection()
-            item.setSelected(True)
-            node = self.graph.nodes[item.key]
-            if item.key == DESTINATION:
-                address, name = self._ip, self._title
-            elif item.key == SOURCE:
-                name, address = self._source
-            else:
-                address, name = node.address, self.names.get(node.address, "")
-            if address:
-                menu.addAction("Copy Address",
-                               lambda: QGuiApplication.clipboard().setText(address))
-            if name and name != address:
-                menu.addAction("Copy Name", lambda: QGuiApplication.clipboard().setText(name))
-            menu.addAction("Copy Details",
-                           lambda: QGuiApplication.clipboard().setText(self.details_text()))
-            menu.addSeparator()
-        menu.addAction("Copy Path", lambda: QGuiApplication.clipboard().setText(self.path_text()))
-        menu.exec(self.view.viewport().mapToGlobal(position))
 
     def closeEvent(self, event) -> None:
         thread, self._thread = self._thread, None
