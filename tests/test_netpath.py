@@ -133,6 +133,36 @@ def test_window_shows_the_graph_history_and_details(qapp, monkeypatch):
     window.close()
 
 
+def test_copy_the_path_or_a_hop(qapp, monkeypatch):
+    from PyQt6.QtGui import QGuiApplication
+    from NetInfoView.ui import netpath_window
+
+    monkeypatch.setattr(netpath_window.NetPathWindow, "start", lambda self: None)
+    window = netpath_window.NetPathWindow("dns.google", "8.8.8.8", source=("OFFICE-PC", "192.168.1.2"))
+    assert window.path_text() == ""  # nothing traced yet
+    window.add_sweep(netpath.sweep("8.8.8.8", fake_probe([]), flows=4))
+    window._on_name("10.0.1.1", "edge-a.example")
+
+    # Nothing selected: the whole path, one line per hop.
+    copied = window.copy_selection()
+    assert QGuiApplication.clipboard().text() == copied
+    lines = copied.splitlines()
+    assert lines[0].startswith("Net Path to dns.google (8.8.8.8), ")
+    assert lines[1] == "From OFFICE-PC (192.168.1.2): 4 of 4 probe flows reached the host"
+    hops = [line.split()[:2] for line in lines[4:]]
+    assert hops == [["1", "10.0.0.1"], ["2", "10.0.1.1"], ["2", "10.0.2.1"],
+                    ["3", "10.0.3.1"], ["4", "8.8.8.8"]]
+    assert "edge-a.example" in lines[5] and lines[5].endswith("2/4")
+
+    # A hop selected: its details.
+    window.items["10.0.1.1"].setSelected(True)
+    copied = window.copy_selection()
+    assert copied.splitlines()[0] == "edge-a.example"
+    assert "Address: 10.0.1.1" in copied and "Hop: 2" in copied
+    assert QGuiApplication.clipboard().text() == copied
+    window.close()
+
+
 def test_net_path_opens_from_the_main_window(window, monkeypatch):
     from NetInfoView.ui import netpath_window
 
