@@ -27,6 +27,13 @@ from ..ping.port_scan import STATIC_PORTS, STATIC_UDP_PORTS
 from ..settings import DisplayMode
 from . import fonts, glyphs
 
+
+def _computer_name() -> str:
+    """Name of the machine running the program, without a trailing .local."""
+    name = socket.gethostname()
+    return name[:-6] if name.lower().endswith(".local") else name
+
+
 BLUE = "#087dff"
 GREEN = "#16a34a"
 RED = "#e5383b"
@@ -468,7 +475,7 @@ class Dashboard(QWidget):
         footer.setHorizontalSpacing(10)
         footer.setVerticalSpacing(2)
         self.connection_dot = label("●", "dotOnline")
-        self.connection_state = label("Connected", "strong")
+        self.connection_state = label("Live", "strong")
         self.connection_ip = label("", "muted")
         footer.addWidget(self.connection_dot, 0, 0)
         footer.addWidget(self.connection_state, 0, 1)
@@ -783,8 +790,9 @@ class Dashboard(QWidget):
 
         subtitle, ip = self._network_text()
         self.subtitle.setText(subtitle)
-        self.connection_state.setText("Connected" if ip else "Not connected")
-        self.connection_ip.setText(ip)
+        self.connection_state.setText("Live" if ip else "Not connected")
+        self.connection_ip.setText(_computer_name())
+        self.connection_ip.setToolTip(ip)
         self.connection_dot.setObjectName("dotOnline" if ip else "dotOffline")
         self.connection_dot.style().polish(self.connection_dot)
 
