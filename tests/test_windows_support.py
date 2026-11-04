@@ -162,7 +162,8 @@ def test_real_mtu_probe_on_windows():
     from pinginfoview.ping import mtu
 
     assert mtu.probe("127.0.0.1", 1472)
-    assert mtu.find_mtu("127.0.0.1") == mtu.MAX_MTU
+    assert not mtu.probe("127.0.0.1", 1473)  # Windows caps DF loopback at 1500
+    assert mtu.find_mtu("127.0.0.1") == 1500
 
 
 @windows_only
