@@ -34,12 +34,12 @@ def test_quoted_tcp_reads_the_ports_of_the_probe_an_error_is_about():
 class FakeListener:
     """Hands out ICMP errors for the probes sent, as a router would."""
 
-    def __init__(self, prober, router):
-        self.prober, self.router, self.closed = prober, router, False
+    def __init__(self, router):
+        self.router, self.closed = router, False
+        self.ports = []  # the source ports the probes went from
 
     def packets(self, wait):
-        first = self.prober._next - len(self.flows)
-        return [(_exceeded(self.router, first + i), self.router) for i in range(len(self.flows))]
+        return [(_exceeded(self.router, port), self.router) for port in self.ports]
 
     def close(self):
         self.closed = True
@@ -47,11 +47,21 @@ class FakeListener:
 
 def test_a_router_on_the_way_answers_for_every_flow(monkeypatch):
     prober = TcpProber(443, wait_ms=500)
-    listener = FakeListener(prober, "10.0.0.1")
-    listener.flows = [0, 1, 2]
+    listener = FakeListener("10.0.0.1")
     prober._listener = listener
-    # The SYNs themselves go nowhere: connect() is stubbed out.
+    # The SYNs themselves go nowhere: connect() is stubbed out, and each
+    # socket opened tells the fake router which port it came from (a port
+    # another program holds is skipped, so they needn't be consecutive).
     monkeypatch.setattr(socket.socket, "connect", lambda self, address: None)
+    real_open = TcpProber._open
+
+    def opened(ttl, port):
+        sock = real_open(ttl, port)
+        if sock is not None:
+            listener.ports.append(port)
+        return sock
+
+    monkeypatch.setattr(TcpProber, "_open", staticmethod(opened))
     answers = prober("8.8.8.8", 3, [0, 1, 2])
     assert sorted(answers) == [0, 1, 2]
     assert {a.address for a in answers.values()} == {"10.0.0.1"}
