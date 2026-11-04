@@ -2,7 +2,7 @@ import socket
 import struct
 import threading
 
-from pinginfoview.ping import netbios
+from NetInfoView.ping import netbios
 
 
 def _response(query_id, names):

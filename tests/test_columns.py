@@ -1,5 +1,5 @@
-from pinginfoview.model.columns import COLUMN_BY_KEY, ip_aware_key
-from pinginfoview.model.host import HostEntry
+from NetInfoView.model.columns import COLUMN_BY_KEY, ip_aware_key
+from NetInfoView.model.host import HostEntry
 
 
 def test_ip_aware_key_orders_octets_numerically():
@@ -38,8 +38,8 @@ def test_host_name_column_sorts_by_bare_host_not_display_name_with_port():
 def test_status_dot_is_grey_for_destination_host_unreachable():
     from types import SimpleNamespace
 
-    from pinginfoview.ping.result import PingStatus
-    from pinginfoview.ui.icons import icon_name_for
+    from NetInfoView.ping.result import PingStatus
+    from NetInfoView.ui.icons import icon_name_for
 
     def dot(status):
         return icon_name_for(SimpleNamespace(enabled=True, last_status=status))

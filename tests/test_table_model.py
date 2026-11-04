@@ -5,10 +5,10 @@ import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 
-from pinginfoview.model.columns import COLUMNS
-from pinginfoview.model.host import HostEntry
-from pinginfoview.model.table_model import HostFilterProxy, HostTableModel
-from pinginfoview.ping.result import PingResult, PingStatus
+from NetInfoView.model.columns import COLUMNS
+from NetInfoView.model.host import HostEntry
+from NetInfoView.model.table_model import HostFilterProxy, HostTableModel
+from NetInfoView.ping.result import PingResult, PingStatus
 
 
 @pytest.fixture(scope="module")
@@ -65,7 +65,7 @@ def test_sorted_by_a_column_pings_dont_change_nothing_is_resorted(qapp, monkeypa
 
 
 def test_show_only_succeeded_follows_each_result_without_a_full_refilter(qapp):
-    from pinginfoview.settings import DisplayMode
+    from NetInfoView.settings import DisplayMode
 
     model, proxy = _grid(3)
     proxy.sort(_column("ip_address"), Qt.SortOrder.AscendingOrder)

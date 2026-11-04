@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 from ..ping.network_interfaces import NetworkInterface
 
 HELP = (
-    "No hosts yet. Pick a network this Mac is connected to and NetInfo\n"
+    "No hosts yet. Pick a network this Mac is connected to and NetInfoView\n"
     "will add every address in it (you can remove any you don't want) —\n"
     "or enter specific hosts or IPs yourself instead."
 )

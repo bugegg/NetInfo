@@ -24,7 +24,7 @@ class VendorUpdateError(Exception):
 
 
 def fetch_oui_csv(url: str = IEEE_OUI_CSV_URL) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": f"NetInfo/{__version__}"})
+    request = urllib.request.Request(url, headers={"User-Agent": f"NetInfoView/{__version__}"})
     try:
         with urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
             return response.read().decode("utf-8", errors="replace")

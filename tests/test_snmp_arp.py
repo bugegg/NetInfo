@@ -5,8 +5,8 @@ import threading
 
 import pytest
 
-from pinginfoview.ping import ber, device_info, snmp_arp
-from pinginfoview.ping.device_info import DeviceInfoJob
+from NetInfoView.ping import ber, device_info, snmp_arp
+from NetInfoView.ping.device_info import DeviceInfoJob
 
 ARP = snmp_arp.ARP_TABLE_OID
 

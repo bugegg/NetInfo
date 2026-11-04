@@ -3,8 +3,8 @@
 import pytest
 from PyQt6.QtWidgets import QApplication
 
-from pinginfoview.ping import tracepath
-from pinginfoview.ping.tracepath import (
+from NetInfoView.ping import tracepath
+from NetInfoView.ping.tracepath import (
     EXCEEDED, FRAG, REACHED, TIMEOUT, UNREACHABLE, Hop, Reply,
 )
 
@@ -147,7 +147,7 @@ def test_real_trace_to_loopback():
 
 
 def test_window_tints_the_hop_where_mtu_drops(qapp, monkeypatch):
-    from pinginfoview.ui import tracepath_window
+    from NetInfoView.ui import tracepath_window
 
     monkeypatch.setattr(tracepath_window.TracepathWindow, "start", lambda self: None)
     window = tracepath_window.TracepathWindow("router", "10.9.9.9")
@@ -163,13 +163,13 @@ def test_window_tints_the_hop_where_mtu_drops(qapp, monkeypatch):
 
 
 def test_menu_opens_a_trace_for_the_selected_host(qapp, tmp_path, monkeypatch):
-    from pinginfoview.fileio.hostfile import parse_host_list
-    from pinginfoview.settings import Settings
-    from pinginfoview.ui import tracepath_window
-    from pinginfoview.ui.main_window import MainWindow
+    from NetInfoView.fileio.hostfile import parse_host_list
+    from NetInfoView.settings import Settings
+    from NetInfoView.ui import tracepath_window
+    from NetInfoView.ui.main_window import MainWindow
 
     monkeypatch.setattr(
-        "pinginfoview.fileio.vendor_db.default_db_path", lambda: tmp_path / "v.sqlite"
+        "NetInfoView.fileio.vendor_db.default_db_path", lambda: tmp_path / "v.sqlite"
     )
     monkeypatch.setattr(tracepath_window.TracepathWindow, "start", lambda self: None)
     win = MainWindow(Settings())
@@ -189,7 +189,7 @@ def test_menu_opens_a_trace_for_the_selected_host(qapp, tmp_path, monkeypatch):
 
 
 def test_whois_takes_the_most_specific_netname():
-    from pinginfoview.ping import whois
+    from NetInfoView.ping import whois
 
     assert whois.parse(
         "% IANA WHOIS server\ninetnum:      142.0.0.0 - 142.255.255.255\n"
@@ -207,7 +207,7 @@ def test_whois_takes_the_most_specific_netname():
 
 
 def test_reserved_addresses_are_named_by_their_block():
-    from pinginfoview.ping import whois
+    from NetInfoView.ping import whois
 
     assert whois.reserved_name("10.33.255.252") == "Private (10.0.0.0/8)"
     assert whois.reserved_name("192.168.1.1") == "Private (192.168.0.0/16)"
@@ -217,7 +217,7 @@ def test_reserved_addresses_are_named_by_their_block():
 
 
 def test_whois_details_of_an_apnic_network():
-    from pinginfoview.ping import whois
+    from NetInfoView.ping import whois
 
     output = (
         "inetnum:      49.0.0.0 - 49.255.255.255\norganisation: APNIC\nsource:       IANA\n\n"
@@ -240,7 +240,7 @@ def test_whois_details_of_an_apnic_network():
 
 
 def test_whois_details_of_an_arin_network():
-    from pinginfoview.ping import whois
+    from NetInfoView.ping import whois
 
     output = (
         "NetRange:       142.250.0.0 - 142.251.255.255\nCIDR:           142.250.0.0/15\n"
@@ -255,7 +255,7 @@ def test_whois_details_of_an_arin_network():
 
 
 def test_cymru_origin_as():
-    from pinginfoview.ping import whois
+    from NetInfoView.ping import whois
 
     assert whois.parse_cymru(
         "AS      | IP               | BGP Prefix          | CC | Registry | Allocated  | AS Name\n"
@@ -267,7 +267,7 @@ def test_cymru_origin_as():
 
 
 def test_double_clicking_a_hop_opens_its_details(qapp, monkeypatch):
-    from pinginfoview.ui import hop_details_window, tracepath_window
+    from NetInfoView.ui import hop_details_window, tracepath_window
 
     monkeypatch.setattr(tracepath_window.TracepathWindow, "start", lambda self: None)
     monkeypatch.setattr(hop_details_window.HopDetailsThread, "start", lambda self: None)
@@ -290,8 +290,8 @@ def test_double_clicking_a_hop_opens_its_details(qapp, monkeypatch):
 
 
 def test_country_column(qapp, monkeypatch):
-    from pinginfoview.ping import whois
-    from pinginfoview.ui import tracepath_window
+    from NetInfoView.ping import whois
+    from NetInfoView.ui import tracepath_window
 
     assert tracepath_window.country_label("th") == "\U0001F1F9\U0001F1ED Thailand"
     assert tracepath_window.country_label("AP") == "\U0001F1E6\U0001F1F5 AP"

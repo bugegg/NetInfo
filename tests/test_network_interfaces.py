@@ -1,7 +1,7 @@
 import subprocess
 from pathlib import Path
 
-import pinginfoview.ping.network_interfaces as ni
+import NetInfoView.ping.network_interfaces as ni
 
 FIXTURE = (Path(__file__).parent / "fixtures" / "ifconfig_sample.txt").read_text()
 

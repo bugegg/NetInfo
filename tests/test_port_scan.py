@@ -4,8 +4,8 @@ import time
 
 import pytest
 
-from pinginfoview.ping import port_scan
-from pinginfoview.ping.port_scan import (
+from NetInfoView.ping import port_scan
+from NetInfoView.ping.port_scan import (
     DEFAULT_PORTS_TEXT,
     guess_device_type,
     parse_ports,

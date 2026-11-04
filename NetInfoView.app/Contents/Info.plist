@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>NetInfo</string>
+    <string>NetInfoView</string>
     <key>CFBundleDisplayName</key>
-    <string>NetInfo</string>
+    <string>NetInfoView</string>
     <key>CFBundleIdentifier</key>
-    <string>net.local.pinginfoview</string>
+    <string>net.local.NetInfoView</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleShortVersionString</key>
@@ -15,7 +15,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>NetInfo</string>
+    <string>NetInfoView</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon.icns</string>
     <key>LSMinimumSystemVersion</key>

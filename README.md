@@ -1,10 +1,10 @@
-# NetInfo
+# NetInfoView
 
 A desktop ping monitor for macOS and Windows. It pings many hosts at a fixed interval over
 ICMP or TCP, shows per-host statistics in a sortable grid, and discovers device
 details (MAC address, hostname, vendor, open ports) for hosts that answer.
-See [spec.md](spec.md) for the full specification. NetInfo was
-previously called PingInfoView.
+See [spec.md](spec.md) for the full specification. NetInfoView was
+called NetInfo up to version 1.4, and PingInfoView before that.
 
 ## Requirements (macOS)
 
@@ -19,29 +19,29 @@ previously called PingInfoView.
 
 ## Installing on Windows
 
-1. Download the latest `NetInfo-<version>-windows-x64-setup.exe` from the
+1. Download the latest `NetInfoView-<version>-windows-x64-setup.exe` from the
    [Releases](../../releases) page and run it. It installs for the current
    user only, so it needs no administrator rights.
 2. The installer isn't code-signed, so Windows SmartScreen may say
    *"Windows protected your PC"*. Click **More info → Run anyway**.
-3. Start NetInfo from the Start menu.
+3. Start NetInfoView from the Start menu.
 
 Windows 10 or 11, 64-bit. Every feature of the Mac version works on
 Windows. **Check LLDP/CDP** also needs [Npcap](https://npcap.com) (the
 capture driver Wireshark installs); without it, that window says so. Settings
 are kept in the registry under
-`HKEY_CURRENT_USER\Software\pinginfoview`; uninstall from
+`HKEY_CURRENT_USER\Software\NetInfoView\NetInfoView`; uninstall from
 **Settings → Apps**.
 
 ## Installing on macOS
 
-1. Download the latest `NetInfo-<version>-arm64.zip` from the
+1. Download the latest `NetInfoView-<version>-arm64.zip` from the
    [Releases](../../releases) page.
-2. Double-click the zip to unpack it. This gives you `NetInfo.app`.
-3. Drag `NetInfo.app` into the **Applications** folder.
+2. Double-click the zip to unpack it. This gives you `NetInfoView.app`.
+3. Drag `NetInfoView.app` into the **Applications** folder.
 4. Open it from Applications or Launchpad.
 
-### First launch: "NetInfo can't be opened"
+### First launch: "NetInfoView can't be opened"
 
 The app is not signed with an Apple Developer ID, so macOS blocks it the first
 time. Allow it once, using either method:
@@ -50,13 +50,13 @@ time. Allow it once, using either method:
 
 1. Double-click the app and dismiss the warning.
 2. Open **System Settings → Privacy & Security**.
-3. Scroll down to the message about NetInfo and click **Open Anyway**.
+3. Scroll down to the message about NetInfoView and click **Open Anyway**.
 4. Confirm with your password or Touch ID, then click **Open**.
 
 **Terminal**
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/NetInfo.app
+xattr -dr com.apple.quarantine /Applications/NetInfoView.app
 ```
 
 After that, the app opens normally.
@@ -64,7 +64,7 @@ After that, the app opens normally.
 ### Local network access
 
 On macOS 15 and later, the first time the app pings a device on your network,
-macOS may ask whether NetInfo can find devices on the local network.
+macOS may ask whether NetInfoView can find devices on the local network.
 Click **Allow**. If you denied it, turn it back on under
 **System Settings → Privacy & Security → Local Network**.
 
@@ -73,17 +73,17 @@ Click **Allow**. If you denied it, turn it back on under
 The app checks GitHub Releases a few seconds after it opens. When a newer
 version is out it asks whether to **Install and Restart**: it downloads the
 new version, replaces itself, and opens again. Your settings are kept. To
-check by hand, right-click the host list and choose **Check for Updates...**.
+check by hand, click the **Check for Updates** button (up arrow) in the toolbar.
 
 To update manually instead, quit the app and replace
-`/Applications/NetInfo.app` with the new copy from the
+`/Applications/NetInfoView.app` with the new copy from the
 [Releases](../../releases) page; on Windows, run the newer installer.
 
 ## Releasing a new version
 
 Push a version tag. GitHub Actions runs the tests, builds the app on an Apple
 Silicon runner and a Windows runner, and publishes
-`NetInfo-<version>-arm64.zip` and `NetInfo-<version>-windows-x64-setup.exe`
+`NetInfoView-<version>-arm64.zip` and `NetInfoView-<version>-windows-x64-setup.exe`
 as a release,
 which installed copies then offer to update to.
 
@@ -96,9 +96,12 @@ The version comes from the tag; there's no file to edit first.
 
 ## Uninstalling
 
-1. Quit the app and move `/Applications/NetInfo.app` to the Trash.
-2. To also remove its settings, delete
-   `~/Library/Preferences/com.pinginfoview.PingInfoView.plist`.
+1. Quit the app and move `/Applications/NetInfoView.app` to the Trash.
+2. To also remove its settings and MAC vendor database, delete
+   `~/Library/Preferences/com.netinfoview.NetInfoView.plist` and
+   `~/Library/Application Support/NetInfoView`. Versions up to 1.4 used
+   `com.pinginfoview.PingInfoView.plist` and `Application Support/PingInfoView`;
+   1.5 copies those over on first launch, and the old copies can go too.
 
 ## Building from source
 
@@ -110,14 +113,14 @@ python3.14 -m venv .venv
 ./build_app.sh
 ```
 
-This produces `dist/NetInfo.app` and `dist/NetInfo-<version>-<arch>.zip`.
-The app icon comes from `NetInfo.app/Contents/Resources/AppIcon.icns`.
+This produces `dist/NetInfoView.app` and `dist/NetInfoView-<version>-<arch>.zip`.
+The app icon comes from `NetInfoView.app/Contents/Resources/AppIcon.icns`.
 
 To run from source without building:
 
 ```bash
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pinginfoview [hostlist.txt]
+.venv/bin/python -m NetInfoView [hostlist.txt]
 ```
 
 Run the tests with:
@@ -137,4 +140,4 @@ py -3.14 -m venv .venv
 .\build_windows.ps1
 ```
 
-This produces `dist\NetInfo-<version>-windows-x64-setup.exe`.
+This produces `dist\NetInfoView-<version>-windows-x64-setup.exe`.

@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from pinginfoview.fileio.vendor_db import VendorDB, normalise_prefix
+from NetInfoView.fileio.vendor_db import VendorDB, normalise_prefix
 
 
 @pytest.fixture
@@ -80,11 +80,32 @@ def test_data_persists_across_separate_connections(tmp_path):
 
 
 def test_default_db_path_is_in_the_per_user_app_data_folder():
-    from pinginfoview.fileio.vendor_db import default_db_path
+    from NetInfoView.fileio.vendor_db import default_db_path
     path = default_db_path()
     if sys.platform == "win32":
         assert "AppData" in str(path)
     else:
         assert "Application Support" in str(path)
     assert path.name == "vendor.sqlite"
-    assert path.parent.name == "PingInfoView"
+    assert path.parent.name == "NetInfoView"
+
+
+def test_migrate_legacy_db_copies_the_old_file_once(tmp_path):
+    from NetInfoView.fileio.vendor_db import migrate_legacy_db
+    legacy = tmp_path / "PingInfoView" / "vendor.sqlite"
+    legacy.parent.mkdir()
+    legacy.write_bytes(b"old")
+    dest = tmp_path / "NetInfoView" / "vendor.sqlite"
+    assert migrate_legacy_db(dest, legacy)
+    assert dest.read_bytes() == b"old"
+    assert legacy.exists()  # kept for older builds
+    legacy.write_bytes(b"newer old")
+    assert not migrate_legacy_db(dest, legacy)  # never overwrites
+    assert dest.read_bytes() == b"old"
+
+
+def test_migrate_legacy_db_without_an_old_file_does_nothing(tmp_path):
+    from NetInfoView.fileio.vendor_db import migrate_legacy_db
+    dest = tmp_path / "new" / "vendor.sqlite"
+    assert not migrate_legacy_db(dest, tmp_path / "missing.sqlite")
+    assert not dest.exists()

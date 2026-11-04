@@ -44,8 +44,8 @@ export formats where practical.
 ```
 Pininfoview/
 ├── requirements.txt            PyQt6>=6.11
-├── PingInfoView.app/           macOS bundle; launcher runs .venv python -m pinginfoview
-├── pinginfoview/
+├── PingInfoView.app/           macOS bundle; launcher runs .venv python -m NetInfoView
+├── NetInfoView/
 │   ├── __main__.py             entry point, fd-limit raise, CLI host-list argument
 │   ├── settings.py             Settings dataclass + QSettings persistence
 │   ├── ping/                   Qt-free networking layer
@@ -374,7 +374,7 @@ SMB and IPP are deliberately worded with hedges.
 
 ### 7.4 MAC vendor database (`fileio/vendor_db.py`, `ping/vendor_update.py`)
 
-- SQLite file at `~/Library/Application Support/PingInfoView/vendor.sqlite`.
+- SQLite file at `~/Library/Application Support/NetInfoView/vendor.sqlite`.
   Tables: `oui(prefix TEXT PK, vendor TEXT)` and `meta(key, value)`, where
   `meta` holds `last_updated`.
 - It **starts empty**; there is no bundled data. The user fills it with the
@@ -580,7 +580,7 @@ HTML and XML values are escaped. HTML output ends with a line
 
 ## 11. Settings persistence (`settings.py`)
 
-- `QSettings("pinginfoview", "PingInfoView")` (a macOS plist).
+- `QSettings("NetInfoView", "NetInfoView")` (a macOS plist); settings from the old `QSettings("pinginfoview", "PingInfoView")` are copied over once on first launch.
 - Loaded at startup. Values that fail type conversion fall back to their
   defaults, and the result is clamped by `sanitised()`.
 - Saved **only when the window closes**.
@@ -590,7 +590,7 @@ HTML and XML values are escaped. HTML output ends with a line
 
 ## 12. Startup and shutdown
 
-**Startup** (`python -m pinginfoview [hostlist.txt]`):
+**Startup** (`python -m NetInfoView [hostlist.txt]`):
 
 1. Raise the soft `RLIMIT_NOFILE` to 4096 (or the hard limit, if that is lower).
    Apps launched by launchd start with a limit of 256, which is too low for the
@@ -600,9 +600,9 @@ HTML and XML values are escaped. HTML output ends with a line
    is loaded as a host list.
 4. If `start_ping_immediately` is on and there are hosts, start pinging.
 
-**App bundle:** `PingInfoView.app` (bundle ID `net.local.pinginfoview`, version
+**App bundle:** `PingInfoView.app` (bundle ID `net.local.NetInfoView`, version
 1.0, minimum macOS 11). Its launcher `cd`s into a **hard-coded** project path,
-runs `.venv/bin/python -m pinginfoview`, and appends stdout and stderr to
+runs `.venv/bin/python -m NetInfoView`, and appends stdout and stderr to
 `~/Library/Logs/PingInfoView.log`.
 
 **Shutdown:** stop the engine and wait up to 3 s. Wait up to 3 s for any

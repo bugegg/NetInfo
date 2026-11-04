@@ -4,10 +4,10 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from pinginfoview.fileio.export import ExportFormat, render
-from pinginfoview.model.columns import COLUMN_BY_KEY
-from pinginfoview.model.host import HostEntry
-from pinginfoview.ping.result import PingResult, PingStatus
+from NetInfoView.fileio.export import ExportFormat, render
+from NetInfoView.model.columns import COLUMN_BY_KEY
+from NetInfoView.model.host import HostEntry
+from NetInfoView.ping.result import PingResult, PingStatus
 
 COLUMNS = [COLUMN_BY_KEY[k] for k in ("host_name", "ip_address", "last_status", "last_rtt")]
 

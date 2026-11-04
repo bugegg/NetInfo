@@ -1,8 +1,8 @@
 """Self-update from GitHub Releases.
 
 Each release (built by .github/workflows/release.yml) carries a zip of the
-macOS .app per CPU type, named ``NetInfo-<version>-<arch>.zip``, and a
-Windows installer, ``NetInfo-<version>-windows-x64-setup.exe``. This module
+macOS .app per CPU type, named ``NetInfoView-<version>-<arch>.zip``, and a
+Windows installer, ``NetInfoView-<version>-windows-x64-setup.exe``. This module
 finds the newest release and downloads the file for this computer. Kept free
 of Qt so it's testable without an event loop; ui/app_update_thread.py runs it
 off the GUI thread.
@@ -37,7 +37,7 @@ from .osinfo import IS_WINDOWS
 GITHUB_REPO = "bugegg/NetInfo"
 LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _REQUEST_TIMEOUT_SECONDS = 30
-_USER_AGENT = f"NetInfo/{__version__}"
+_USER_AGENT = f"NetInfoView/{__version__}"
 
 
 class AppUpdateError(Exception):
@@ -136,7 +136,7 @@ def running_app_bundle() -> Path | None:
     Windows)."""
     if IS_WINDOWS or not getattr(sys, "frozen", False):
         return None
-    # .../NetInfo.app/Contents/MacOS/NetInfo
+    # .../NetInfoView.app/Contents/MacOS/NetInfoView
     bundle = Path(sys.executable).resolve().parents[2]
     return bundle if bundle.suffix == ".app" else None
 
@@ -171,45 +171,64 @@ def download_and_extract(release: Release) -> Path:
             f"Version {release.version} has no download for this computer "
             f"({platform.system()} {platform.machine()})."
         )
-    work = Path(tempfile.mkdtemp(prefix="NetInfo-update-"))
+    work = Path(tempfile.mkdtemp(prefix="NetInfoView-update-"))
     if IS_WINDOWS:
         return download(release.asset_url, work / release.asset_url.rsplit("/", 1)[-1])
     zip_path = download(release.asset_url, work / "update.zip")
     return extract_app(zip_path, work / "extracted")
 
 
-def installer_script(new_app: Path, target_app: Path, pid: int) -> str:
+def installer_script(
+    new_app: Path, target_app: Path, pid: int, renamed_from: Path | None = None
+) -> str:
     """Shell script that waits for ``pid`` to exit, swaps the bundle, relaunches.
 
     The old bundle is moved aside first and only deleted once the new one is
     in place, so a failed copy puts the old app back rather than leaving none.
+    When the app's name changed (NetInfo.app became NetInfoView.app),
+    ``renamed_from`` is the running bundle: it is what gets set aside, and
+    the new bundle goes in under its new name next to it.
     """
+    old_app = renamed_from or target_app
     new_q, target_q = shlex.quote(str(new_app)), shlex.quote(str(target_app))
-    backup_q = shlex.quote(str(target_app) + ".old")
+    old_q = shlex.quote(str(old_app))
+    backup_q = shlex.quote(str(old_app) + ".old")
+    clear_target = f"rm -rf {target_q}\n" if renamed_from else ""
     return f"""#!/bin/bash
 while kill -0 {pid} 2>/dev/null; do sleep 0.5; done
 rm -rf {backup_q}
-mv {target_q} {backup_q} || exit 1
+mv {old_q} {backup_q} || exit 1
+{clear_target}app={target_q}
 if /usr/bin/ditto {new_q} {target_q}; then
     rm -rf {backup_q}
 else
     rm -rf {target_q}
-    mv {backup_q} {target_q}
+    mv {backup_q} {old_q}
+    app={old_q}
 fi
-/usr/bin/xattr -dr com.apple.quarantine {target_q} 2>/dev/null
-/usr/bin/open {target_q}
+/usr/bin/xattr -dr com.apple.quarantine "$app" 2>/dev/null
+/usr/bin/open "$app"
 rm -rf {shlex.quote(str(new_app.parent.parent))}
 """
 
 
 def install_and_relaunch(new_app: Path, target_app: Path) -> None:
-    """Start the detached swap; the caller must then quit the app."""
+    """Start the detached swap; the caller must then quit the app.
+
+    ``target_app`` is the running bundle. If the new one has another name,
+    it is installed under that name in the same folder and the old one goes.
+    """
     if not os.access(target_app.parent, os.W_OK):
         raise AppUpdateError(
             f"No permission to replace the app in {target_app.parent}."
         )
-    script = Path(tempfile.mkstemp(prefix="NetInfo-install-", suffix=".sh")[1])
-    script.write_text(installer_script(new_app, target_app, os.getpid()))
+    renamed_from = None
+    if new_app.name != target_app.name:
+        renamed_from, target_app = target_app, target_app.with_name(new_app.name)
+    script = Path(tempfile.mkstemp(prefix="NetInfoView-install-", suffix=".sh")[1])
+    script.write_text(
+        installer_script(new_app, target_app, os.getpid(), renamed_from=renamed_from)
+    )
     script.chmod(0o700)
     subprocess.Popen(
         ["/bin/bash", str(script)],

@@ -50,7 +50,7 @@ def title_from_html(body: bytes) -> str:
 
 def _fetch(ip: str, port: int, use_tls: bool, timeout: float) -> bytes:
     request = (
-        f"GET / HTTP/1.0\r\nHost: {ip}\r\nUser-Agent: NetInfo\r\n"
+        f"GET / HTTP/1.0\r\nHost: {ip}\r\nUser-Agent: NetInfoView\r\n"
         "Accept: text/html\r\nConnection: close\r\n\r\n"
     ).encode("ascii")
     with socket.create_connection((ip, port), timeout=timeout) as raw:

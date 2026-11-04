@@ -1,10 +1,10 @@
-"""Tests for the `python -m pinginfoview` entry point's startup helpers."""
+"""Tests for the `python -m NetInfoView` entry point's startup helpers."""
 
 import pytest
 
 resource = pytest.importorskip("resource")  # POSIX only; Windows has no fd limit to raise
 
-from pinginfoview.__main__ import FILE_DESCRIPTOR_LIMIT, _raise_file_descriptor_limit
+from NetInfoView.__main__ import FILE_DESCRIPTOR_LIMIT, _raise_file_descriptor_limit
 
 
 def test_raises_the_soft_limit_toward_the_target(monkeypatch):

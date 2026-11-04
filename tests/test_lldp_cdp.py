@@ -6,14 +6,14 @@ import struct
 import pytest
 from PyQt6.QtWidgets import QApplication, QToolBar
 
-from pinginfoview.ping import lldp_cdp
-from pinginfoview.ping.lldp_cdp import Neighbor
+from NetInfoView.ping import lldp_cdp
+from NetInfoView.ping.lldp_cdp import Neighbor
 
 MAC = bytes.fromhex("0011223344aa")
 
 
 def _iface(name, port="", active=True):
-    from pinginfoview.ping.network_interfaces import EthernetInterface
+    from NetInfoView.ping.network_interfaces import EthernetInterface
 
     return EthernetInterface(name, port, active)
 
@@ -133,8 +133,8 @@ def test_more_extension_tlvs():
 
 
 def test_an_ip_is_looked_up_in_arp_when_not_advertised(qapp, monkeypatch):
-    from pinginfoview.ui import lldp_cdp_window
-    from pinginfoview.ui.lldp_cdp_window import format_neighbor
+    from NetInfoView.ui import lldp_cdp_window
+    from NetInfoView.ui.lldp_cdp_window import format_neighbor
 
     n = lldp_cdp.parse_frame(_hpe_frame(), "en10")
     assert "  IP Address:             not advertised, and not found in the ARP table\n" in (
@@ -159,7 +159,7 @@ def test_an_ip_is_looked_up_in_arp_when_not_advertised(qapp, monkeypatch):
 
 
 def test_find_ip_from_the_arp_table(monkeypatch):
-    from pinginfoview.ping import arp
+    from NetInfoView.ping import arp
 
     monkeypatch.setattr(arp, "_load_table", lambda: {
         "172.16.19.1": "B8:38:61:03:6E:FF", "172.16.19.2": "DC:68:0C:70:AD:30",
@@ -275,7 +275,7 @@ def test_listen_stops_when_asked(monkeypatch):
 
 
 def test_window_checks_the_chosen_interface(qapp, monkeypatch):
-    from pinginfoview.ui import lldp_cdp_window
+    from NetInfoView.ui import lldp_cdp_window
 
     started = []
     monkeypatch.setattr(lldp_cdp_window, "ethernet_interfaces",
@@ -330,7 +330,7 @@ def test_window_checks_the_chosen_interface(qapp, monkeypatch):
 
 
 def test_interfaces_without_link_are_hidden(qapp, monkeypatch):
-    from pinginfoview.ui import lldp_cdp_window
+    from NetInfoView.ui import lldp_cdp_window
 
     links = {"en10": False}
     monkeypatch.setattr(lldp_cdp_window, "ethernet_interfaces", lambda: [
@@ -354,7 +354,7 @@ def test_interfaces_without_link_are_hidden(qapp, monkeypatch):
 
 
 def test_ethernet_interfaces_order(monkeypatch):
-    from pinginfoview.ping import network_interfaces as ni
+    from NetInfoView.ping import network_interfaces as ni
 
     ifconfig = "".join(
         f"{name}: flags=8863<UP> mtu 1500\n\tstatus: {state}\n"
@@ -374,7 +374,7 @@ def test_ethernet_interfaces_order(monkeypatch):
 
 
 def test_window_without_an_active_port(qapp, monkeypatch):
-    from pinginfoview.ui import lldp_cdp_window
+    from NetInfoView.ui import lldp_cdp_window
 
     monkeypatch.setattr(lldp_cdp_window, "ethernet_interfaces", lambda: [])
     monkeypatch.setattr(lldp_cdp_window, "capture_unavailable", lambda: "")
@@ -388,12 +388,12 @@ def test_window_without_an_active_port(qapp, monkeypatch):
 
 
 def test_button_opens_the_interface_picker(qapp, tmp_path, monkeypatch):
-    from pinginfoview.settings import Settings
-    from pinginfoview.ui import lldp_cdp_window
-    from pinginfoview.ui.main_window import MainWindow
+    from NetInfoView.settings import Settings
+    from NetInfoView.ui import lldp_cdp_window
+    from NetInfoView.ui.main_window import MainWindow
 
     monkeypatch.setattr(
-        "pinginfoview.fileio.vendor_db.default_db_path", lambda: tmp_path / "v.sqlite"
+        "NetInfoView.fileio.vendor_db.default_db_path", lambda: tmp_path / "v.sqlite"
     )
     monkeypatch.setattr(lldp_cdp_window, "ethernet_interfaces", lambda: [_iface("en7")])
     win = MainWindow(Settings())
@@ -413,8 +413,8 @@ def test_button_opens_the_interface_picker(qapp, tmp_path, monkeypatch):
 
 
 def test_lldp_window_says_when_npcap_is_missing(qapp, monkeypatch):
-    from pinginfoview.ping import npcap
-    from pinginfoview.ui import lldp_cdp_window
+    from NetInfoView.ping import npcap
+    from NetInfoView.ui import lldp_cdp_window
 
     monkeypatch.setattr(lldp_cdp_window, "ethernet_interfaces", lambda: [])
     monkeypatch.setattr(lldp_cdp_window, "capture_unavailable", lambda: npcap.NOT_INSTALLED)

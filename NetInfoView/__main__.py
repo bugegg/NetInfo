@@ -1,4 +1,4 @@
-"""Entry point: ``python -m pinginfoview``."""
+"""Entry point: ``python -m NetInfoView``."""
 
 from __future__ import annotations
 
@@ -7,12 +7,13 @@ import sys
 from PyQt6.QtWidgets import QApplication
 
 from .fileio.hostfile import HostListError, parse_host_list
-from .settings import APPLICATION, ORGANISATION, Settings
+from .fileio.vendor_db import migrate_legacy_db
+from .settings import APPLICATION, ORGANISATION, Settings, migrate_legacy_settings
 
 #: launchd starts GUI apps (anything opened via Finder or `open`, as the
 #: packaged .app is) with a soft file-descriptor limit of just 256 — far
 #: below what a big device-info sweep needs (ping.port_scan.MAX_WORKERS
-#: alone can have 300 sockets in flight). A plain `python -m pinginfoview`
+#: alone can have 300 sockets in flight). A plain `python -m NetInfoView`
 #: from Terminal already inherits a much higher shell limit, so this only
 #: actually matters for the packaged app, but it's harmless either way.
 FILE_DESCRIPTOR_LIMIT = 4096
@@ -51,6 +52,10 @@ def main(argv: list[str] | None = None) -> int:
     app.setOrganizationName(ORGANISATION)
 
     from .ui.main_window import MainWindow
+
+    # Releases up to 1.4 stored these under the old PingInfoView name.
+    migrate_legacy_settings()
+    migrate_legacy_db()
 
     settings = Settings.load()
     window = MainWindow(settings)

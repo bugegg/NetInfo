@@ -2,16 +2,16 @@
 (no display required — PyQt6 can build widgets headlessly for this)."""
 
 import pytest
-from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
+from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QToolBar
 
-from pinginfoview.fileio.hostfile import parse_host_list
-from pinginfoview.ping import port_scan
-from pinginfoview.ping.network_interfaces import NetworkInterface
-from pinginfoview.ping.result import PingResult, PingStatus
-from pinginfoview.settings import Settings
-from pinginfoview.ui.add_hosts_dialog import AddHostsDialog
-from pinginfoview.ui.main_window import MainWindow
-from pinginfoview.ui.network_select_dialog import NetworkSelectDialog
+from NetInfoView.fileio.hostfile import parse_host_list
+from NetInfoView.ping import port_scan
+from NetInfoView.ping.network_interfaces import NetworkInterface
+from NetInfoView.ping.result import PingResult, PingStatus
+from NetInfoView.settings import Settings
+from NetInfoView.ui.add_hosts_dialog import AddHostsDialog
+from NetInfoView.ui.main_window import MainWindow
+from NetInfoView.ui.network_select_dialog import NetworkSelectDialog
 
 #: Captured before the `window` fixture mocks port_scan.scan_many for speed,
 #: so the one test that wants the genuine implementation can restore it.
@@ -28,22 +28,22 @@ def qapp():
 def window(qapp, tmp_path, monkeypatch):
     # Keep the vendor DB test-local rather than touching the user's real one.
     monkeypatch.setattr(
-        "pinginfoview.fileio.vendor_db.default_db_path",
+        "NetInfoView.fileio.vendor_db.default_db_path",
         lambda: tmp_path / "vendor.sqlite",
     )
     # Port scanning does real (slow, 0.6s/call) TCP connects; tests that
     # don't specifically exercise it get an instant no-op so the suite that
     # drives several device-info sweeps per test stays fast and deterministic.
     monkeypatch.setattr(
-        "pinginfoview.ping.device_info.port_scan.scan_many",
+        "NetInfoView.ping.device_info.port_scan.scan_many",
         lambda ip_by_key, ports=None, udp_ports=None: {key: [] for key in ip_by_key},
     )
     # Likewise DNS names: no real queries to whatever DNS this machine uses.
-    monkeypatch.setattr("pinginfoview.ping.dns_ptr.system_nameservers", lambda: [])
-    monkeypatch.setattr("pinginfoview.ping.dns_ptr.lookup", lambda ip, servers=None: "")
+    monkeypatch.setattr("NetInfoView.ping.dns_ptr.system_nameservers", lambda: [])
+    monkeypatch.setattr("NetInfoView.ping.dns_ptr.lookup", lambda ip, servers=None: "")
     # And no SNMP walks of the guessed gateways of the test networks.
     monkeypatch.setattr(
-        "pinginfoview.ping.device_info.snmp_arp.lookup_many",
+        "NetInfoView.ping.device_info.snmp_arp.lookup_many",
         lambda ips, routers, community: {},
     )
     win = MainWindow(Settings())
@@ -69,11 +69,11 @@ def test_device_info_sweep_skips_hosts_without_a_successful_ping(window, monkeyp
 
     resolved_ips = []
     monkeypatch.setattr(
-        "pinginfoview.ping.hostname.resolve",
+        "NetInfoView.ping.hostname.resolve",
         lambda ip: resolved_ips.append(ip) or "",
     )
     monkeypatch.setattr(
-        "pinginfoview.ping.arp.lookup", lambda ip, force_refresh=False: ""
+        "NetInfoView.ping.arp.lookup", lambda ip, force_refresh=False: ""
     )
 
     window._refresh_device_info()
@@ -89,7 +89,7 @@ def test_device_info_sweep_does_nothing_when_nothing_has_succeeded(window, monke
 
     def fail(*a, **k):
         raise AssertionError("hostname.resolve should not run for a dead-only sweep")
-    monkeypatch.setattr("pinginfoview.ping.hostname.resolve", fail)
+    monkeypatch.setattr("NetInfoView.ping.hostname.resolve", fail)
 
     window._refresh_device_info()
     assert window._device_info_thread is None
@@ -122,11 +122,11 @@ def test_fully_resolved_host_is_never_queried_again(window, monkeypatch):
     )
     call_count = [0]
     monkeypatch.setattr(
-        "pinginfoview.ping.hostname.resolve",
+        "NetInfoView.ping.hostname.resolve",
         lambda ip: (call_count.__setitem__(0, call_count[0] + 1), "device.local")[1],
     )
     monkeypatch.setattr(
-        "pinginfoview.ping.arp.lookup", lambda ip, force_refresh=False: "00:11:22:DD:EE:FF"
+        "NetInfoView.ping.arp.lookup", lambda ip, force_refresh=False: "00:11:22:DD:EE:FF"
     )
     window._vendor_db.replace_all([("001122", "Example Co")], updated_at="now")
 
@@ -148,10 +148,10 @@ def test_unresolvable_host_gets_exactly_six_attempts_then_stops(window, monkeypa
     )
     call_count = [0]
     monkeypatch.setattr(
-        "pinginfoview.ping.hostname.resolve",
+        "NetInfoView.ping.hostname.resolve",
         lambda ip: (call_count.__setitem__(0, call_count[0] + 1), "")[1],
     )
-    monkeypatch.setattr("pinginfoview.ping.arp.lookup", lambda ip, force_refresh=False: "")
+    monkeypatch.setattr("NetInfoView.ping.arp.lookup", lambda ip, force_refresh=False: "")
 
     for _ in range(9):  # more ticks than the retry budget allows
         _run_sweep_and_wait(window)
@@ -168,7 +168,7 @@ FAKE_INTERFACES = [
 def test_start_with_no_hosts_offers_a_network_and_populates_it(window, monkeypatch):
     assert window._model.rowCount() == 0
     monkeypatch.setattr(
-        "pinginfoview.ui.main_window.list_network_interfaces",
+        "NetInfoView.ui.main_window.list_network_interfaces",
         lambda: FAKE_INTERFACES,
     )
 
@@ -185,7 +185,7 @@ def test_start_with_no_hosts_offers_a_network_and_populates_it(window, monkeypat
 
 def test_cancelling_the_network_dialog_leaves_the_host_list_empty(window, monkeypatch):
     monkeypatch.setattr(
-        "pinginfoview.ui.main_window.list_network_interfaces",
+        "NetInfoView.ui.main_window.list_network_interfaces",
         lambda: FAKE_INTERFACES,
     )
     monkeypatch.setattr(
@@ -201,7 +201,7 @@ def test_start_pinging_skips_the_dialog_when_hosts_already_exist(window, monkeyp
 
     def fail(*a, **k):
         raise AssertionError("the dialog should not appear when hosts already exist")
-    monkeypatch.setattr("pinginfoview.ui.main_window.list_network_interfaces", fail)
+    monkeypatch.setattr("NetInfoView.ui.main_window.list_network_interfaces", fail)
 
     window.start_pinging()
     assert window._engine is not None
@@ -211,7 +211,7 @@ def test_start_pinging_skips_the_dialog_when_hosts_already_exist(window, monkeyp
 
 def test_no_interfaces_found_falls_through_to_manual_entry(window, monkeypatch):
     monkeypatch.setattr(
-        "pinginfoview.ui.main_window.list_network_interfaces", lambda: []
+        "NetInfoView.ui.main_window.list_network_interfaces", lambda: []
     )
 
     def accept_with_hosts(self):
@@ -225,7 +225,7 @@ def test_no_interfaces_found_falls_through_to_manual_entry(window, monkeypatch):
 
 def test_no_interfaces_found_and_manual_entry_cancelled_returns_false(window, monkeypatch):
     monkeypatch.setattr(
-        "pinginfoview.ui.main_window.list_network_interfaces", lambda: []
+        "NetInfoView.ui.main_window.list_network_interfaces", lambda: []
     )
     monkeypatch.setattr(
         AddHostsDialog, "exec", lambda self: QDialog.DialogCode.Rejected
@@ -236,7 +236,7 @@ def test_no_interfaces_found_and_manual_entry_cancelled_returns_false(window, mo
 
 def test_enter_hosts_manually_button_opens_add_hosts_dialog(window, monkeypatch):
     monkeypatch.setattr(
-        "pinginfoview.ui.main_window.list_network_interfaces",
+        "NetInfoView.ui.main_window.list_network_interfaces",
         lambda: FAKE_INTERFACES,
     )
 
@@ -276,15 +276,15 @@ def test_table_defaults_to_sorted_by_ip_address_ascending(window):
 
 def test_port_scan_runs_by_default_and_fills_in_the_columns(window, monkeypatch):
     monkeypatch.setattr(
-        "pinginfoview.ping.device_info.port_scan.scan_many",
+        "NetInfoView.ping.device_info.port_scan.scan_many",
         lambda ip_by_key, ports=None, udp_ports=None: {key: [22, 80] for key in ip_by_key},
     )
     monkeypatch.setattr(
-        "pinginfoview.ping.device_info.port_scan.guess_device_type",
+        "NetInfoView.ping.device_info.port_scan.guess_device_type",
         lambda ports: "Something SSH-ish",
     )
-    monkeypatch.setattr("pinginfoview.ping.hostname.resolve", lambda ip: "")
-    monkeypatch.setattr("pinginfoview.ping.arp.lookup", lambda ip, force_refresh=False: "")
+    monkeypatch.setattr("NetInfoView.ping.hostname.resolve", lambda ip: "")
+    monkeypatch.setattr("NetInfoView.ping.arp.lookup", lambda ip, force_refresh=False: "")
 
     entries = _entries_with_statuses(window, "192.168.90.1 Scanned\n")
     entries[0].apply(
@@ -301,10 +301,10 @@ def test_port_scan_runs_by_default_and_fills_in_the_columns(window, monkeypatch)
 def test_port_scan_can_be_disabled_with_an_empty_ports_field(window, monkeypatch):
     def fail(*a, **k):
         raise AssertionError("scan_many must not run when the ports field is empty")
-    monkeypatch.setattr("pinginfoview.ping.device_info.port_scan.scan_many", fail)
-    monkeypatch.setattr("pinginfoview.ping.hostname.resolve", lambda ip: "real.local")
+    monkeypatch.setattr("NetInfoView.ping.device_info.port_scan.scan_many", fail)
+    monkeypatch.setattr("NetInfoView.ping.hostname.resolve", lambda ip: "real.local")
     monkeypatch.setattr(
-        "pinginfoview.ping.arp.lookup", lambda ip, force_refresh=False: "E8:13:6E:00:00:00"
+        "NetInfoView.ping.arp.lookup", lambda ip, force_refresh=False: "E8:13:6E:00:00:00"
     )
     window._vendor_db.replace_all([("E8136E", "Example Co")], updated_at="now")
     window.settings.port_scan_ports = ""
@@ -326,12 +326,12 @@ def test_port_scan_still_runs_for_a_host_with_a_known_vendor(window, monkeypatch
     has a real vendor, but the scan should still run — the point of the
     feature is to report whatever ports a host has open, for any host."""
     monkeypatch.setattr(
-        "pinginfoview.ping.device_info.port_scan.scan_many",
+        "NetInfoView.ping.device_info.port_scan.scan_many",
         lambda ip_by_key, ports=None, udp_ports=None: {key: [22] for key in ip_by_key},
     )
-    monkeypatch.setattr("pinginfoview.ping.hostname.resolve", lambda ip: "")
+    monkeypatch.setattr("NetInfoView.ping.hostname.resolve", lambda ip: "")
     monkeypatch.setattr(
-        "pinginfoview.ping.arp.lookup", lambda ip, force_refresh=False: "E8:13:6E:00:00:00"
+        "NetInfoView.ping.arp.lookup", lambda ip, force_refresh=False: "E8:13:6E:00:00:00"
     )
     window._vendor_db.replace_all([("E8136E", "Example Co")], updated_at="now")
     window.settings.port_scan_ports = "2222, 9999"
@@ -354,9 +354,9 @@ def test_port_scan_can_be_disabled_with_an_all_invalid_ports_field(window, monke
     ports in a tight, pointless loop."""
     def fail(*a, **k):
         raise AssertionError("scan_many must not run when nothing valid was entered")
-    monkeypatch.setattr("pinginfoview.ping.device_info.port_scan.scan_many", fail)
-    monkeypatch.setattr("pinginfoview.ping.hostname.resolve", lambda ip: "")
-    monkeypatch.setattr("pinginfoview.ping.arp.lookup", lambda ip, force_refresh=False: "")
+    monkeypatch.setattr("NetInfoView.ping.device_info.port_scan.scan_many", fail)
+    monkeypatch.setattr("NetInfoView.ping.hostname.resolve", lambda ip: "")
+    monkeypatch.setattr("NetInfoView.ping.arp.lookup", lambda ip, force_refresh=False: "")
     window.settings.port_scan_ports = "not, a, port, list"
 
     entries = _entries_with_statuses(window, "192.168.90.3\n")
@@ -371,8 +371,8 @@ def test_port_scan_can_be_disabled_with_an_all_invalid_ports_field(window, monke
 def test_custom_ports_field_is_actually_used_for_the_scan(window, monkeypatch):
     """The point of this feature: typing a custom port list into Options
     changes which ports actually get probed."""
-    monkeypatch.setattr("pinginfoview.ping.hostname.resolve", lambda ip: "")
-    monkeypatch.setattr("pinginfoview.ping.arp.lookup", lambda ip, force_refresh=False: "")
+    monkeypatch.setattr("NetInfoView.ping.hostname.resolve", lambda ip: "")
+    monkeypatch.setattr("NetInfoView.ping.arp.lookup", lambda ip, force_refresh=False: "")
 
     seen_ports = []
 
@@ -380,7 +380,7 @@ def test_custom_ports_field_is_actually_used_for_the_scan(window, monkeypatch):
         seen_ports.append(set(ports))
         return {key: [] for key in ip_by_key}
     monkeypatch.setattr(
-        "pinginfoview.ping.device_info.port_scan.scan_many", fake_scan_many
+        "NetInfoView.ping.device_info.port_scan.scan_many", fake_scan_many
     )
     window.settings.port_scan_ports = "2222, 9999"
 
@@ -407,7 +407,7 @@ def test_port_scan_against_a_real_local_listener(window, monkeypatch):
 
     # Undo the window fixture's speed-focused no-op mock for this one test.
     monkeypatch.setattr(
-        "pinginfoview.ping.device_info.port_scan.scan_many", _REAL_SCAN_MANY
+        "NetInfoView.ping.device_info.port_scan.scan_many", _REAL_SCAN_MANY
     )
 
     server = socket_module.socket(socket_module.AF_INET, socket_module.SOCK_STREAM)
@@ -416,9 +416,9 @@ def test_port_scan_against_a_real_local_listener(window, monkeypatch):
     window.settings.port_scan_ports = str(port)
     server.listen(1)
     try:
-        monkeypatch.setattr("pinginfoview.ping.hostname.resolve", lambda ip: "")
+        monkeypatch.setattr("NetInfoView.ping.hostname.resolve", lambda ip: "")
         monkeypatch.setattr(
-            "pinginfoview.ping.arp.lookup", lambda ip, force_refresh=False: ""
+            "NetInfoView.ping.arp.lookup", lambda ip, force_refresh=False: ""
         )
         entries = _entries_with_statuses(window, "127.0.0.1 Loopback\n")
         entries[0].apply(
@@ -439,7 +439,7 @@ def test_udp_port_scan_against_a_real_local_listener(window, monkeypatch):
     import socket as socket_module
 
     monkeypatch.setattr(
-        "pinginfoview.ping.device_info.port_scan.scan_many", _REAL_SCAN_MANY
+        "NetInfoView.ping.device_info.port_scan.scan_many", _REAL_SCAN_MANY
     )
 
     server = socket_module.socket(socket_module.AF_INET, socket_module.SOCK_DGRAM)
@@ -447,9 +447,9 @@ def test_udp_port_scan_against_a_real_local_listener(window, monkeypatch):
     port = server.getsockname()[1]
     window.settings.port_scan_ports = f"{port}/udp"
     try:
-        monkeypatch.setattr("pinginfoview.ping.hostname.resolve", lambda ip: "")
+        monkeypatch.setattr("NetInfoView.ping.hostname.resolve", lambda ip: "")
         monkeypatch.setattr(
-            "pinginfoview.ping.arp.lookup", lambda ip, force_refresh=False: ""
+            "NetInfoView.ping.arp.lookup", lambda ip, force_refresh=False: ""
         )
         entries = _entries_with_statuses(window, "127.0.0.1 Loopback\n")
         entries[0].apply(
@@ -467,10 +467,10 @@ def test_udp_port_scan_against_a_real_local_listener(window, monkeypatch):
 
 
 def test_named_host_gets_all_its_resolved_ips(window, monkeypatch):
-    monkeypatch.setattr("pinginfoview.ping.hostname.resolve", lambda ip: "")
-    monkeypatch.setattr("pinginfoview.ping.arp.lookup", lambda ip, force_refresh=False: "")
+    monkeypatch.setattr("NetInfoView.ping.hostname.resolve", lambda ip: "")
+    monkeypatch.setattr("NetInfoView.ping.arp.lookup", lambda ip, force_refresh=False: "")
     monkeypatch.setattr(
-        "pinginfoview.ping.device_info.resolve_all_ips",
+        "NetInfoView.ping.device_info.resolve_all_ips",
         lambda host: ["203.0.113.1", "203.0.113.2", "203.0.113.3"],
     )
 
@@ -488,9 +488,9 @@ def test_named_host_gets_all_its_resolved_ips(window, monkeypatch):
 def test_literal_ip_host_gets_an_empty_all_ips_list_not_a_retry_loop(window, monkeypatch):
     """A host already given as a literal IP has nothing to discover — it
     should settle immediately rather than burn through retry attempts."""
-    monkeypatch.setattr("pinginfoview.ping.hostname.resolve", lambda ip: "real.local")
+    monkeypatch.setattr("NetInfoView.ping.hostname.resolve", lambda ip: "real.local")
     monkeypatch.setattr(
-        "pinginfoview.ping.arp.lookup", lambda ip, force_refresh=False: "E8:13:6E:00:00:00"
+        "NetInfoView.ping.arp.lookup", lambda ip, force_refresh=False: "E8:13:6E:00:00:00"
     )
     window._vendor_db.replace_all([("E8136E", "Example Co")], updated_at="now")
 
@@ -514,7 +514,7 @@ def test_clear_all_hosts_removes_everything_on_confirm(window, monkeypatch):
     _entries_with_statuses(window, "192.168.1.1\n192.168.1.2\n192.168.1.3\n")
     assert window._model.rowCount() == 3
     monkeypatch.setattr(
-        "pinginfoview.ui.main_window.QMessageBox.question",
+        "NetInfoView.ui.main_window.QMessageBox.question",
         lambda *a, **k: QMessageBox.StandardButton.Yes,
     )
 
@@ -526,7 +526,7 @@ def test_clear_all_hosts_removes_everything_on_confirm(window, monkeypatch):
 def test_clear_all_hosts_does_nothing_on_cancel(window, monkeypatch):
     _entries_with_statuses(window, "192.168.1.1\n192.168.1.2\n")
     monkeypatch.setattr(
-        "pinginfoview.ui.main_window.QMessageBox.question",
+        "NetInfoView.ui.main_window.QMessageBox.question",
         lambda *a, **k: QMessageBox.StandardButton.No,
     )
 
@@ -540,7 +540,7 @@ def test_clear_all_hosts_on_an_empty_list_skips_the_confirmation(window, monkeyp
 
     def fail(*a, **k):
         raise AssertionError("should not prompt when there's nothing to clear")
-    monkeypatch.setattr("pinginfoview.ui.main_window.QMessageBox.question", fail)
+    monkeypatch.setattr("NetInfoView.ui.main_window.QMessageBox.question", fail)
 
     window.clear_all_hosts()  # must not raise
 
@@ -552,6 +552,13 @@ def test_remove_selected_is_still_available_on_the_context_menu(window):
         if not action.isSeparator() and action.menu() is None
     ]
     assert "&Remove Selected" in names
+
+
+def test_check_for_updates_has_a_toolbar_button(window):
+    toolbar = window.findChild(QToolBar)
+    assert window.action_check_updates in toolbar.actions()
+    assert not window.action_check_updates.icon().isNull()
+    assert window.action_check_updates not in window._table.actions()
 
 
 def test_add_hosts_ok_disabled_until_a_host_is_entered(qapp):
@@ -592,7 +599,7 @@ def test_add_hosts_refuses_an_oversized_range_and_stays_open(qapp, monkeypatch):
 
 
 def test_status_bar_counts_hosts_hidden_by_display_mode(window):
-    from pinginfoview.settings import DisplayMode
+    from NetInfoView.settings import DisplayMode
 
     window._set_display_mode(DisplayMode.SUCCEEDED)
     _entries_with_statuses(window, "192.168.1.1\n192.168.1.2")
@@ -601,7 +608,7 @@ def test_status_bar_counts_hosts_hidden_by_display_mode(window):
 
 
 def test_adding_hosts_switches_a_filtered_view_back_to_show_all(window, monkeypatch):
-    from pinginfoview.settings import DisplayMode
+    from NetInfoView.settings import DisplayMode
 
     window._set_display_mode(DisplayMode.SUCCEEDED)
 

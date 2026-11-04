@@ -7,7 +7,7 @@ verifies a chain itself, and a company's TLS-inspecting proxy installs its
 root where Windows (not OpenSSL) looks. Either way the download fails with
 "self-signed certificate in certificate chain" where a browser succeeds.
 truststore hands verification to Windows' CryptoAPI and macOS's Security
-framework, so whatever the browser trusts, NetInfo does too.
+framework, so whatever the browser trusts, NetInfoView does too.
 """
 
 from __future__ import annotations

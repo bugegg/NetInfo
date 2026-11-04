@@ -4,11 +4,11 @@ import pytest
 from PyQt6.QtCore import QEvent
 from PyQt6.QtWidgets import QApplication
 
-from pinginfoview.fileio.hostfile import parse_host_list
-from pinginfoview.model.samples import SampleStore, nice_ceiling, summarize
-from pinginfoview.ping.result import PingResult, PingStatus
-from pinginfoview.settings import Settings
-from pinginfoview.ui.main_window import MainWindow
+from NetInfoView.fileio.hostfile import parse_host_list
+from NetInfoView.model.samples import SampleStore, nice_ceiling, summarize
+from NetInfoView.ping.result import PingResult, PingStatus
+from NetInfoView.settings import Settings
+from NetInfoView.ui.main_window import MainWindow
 
 
 def _ok(rtt, ts):
@@ -58,7 +58,7 @@ def test_nice_ceiling(value, expected):
 @pytest.fixture
 def window(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "pinginfoview.fileio.vendor_db.default_db_path",
+        "NetInfoView.fileio.vendor_db.default_db_path",
         lambda: tmp_path / "vendor.sqlite",
     )
     win = MainWindow(Settings())
@@ -96,7 +96,7 @@ def test_double_click_opens_the_host_graph(window):
 
 
 def test_samples_ignore_the_lower_pane_recording_filter(window):
-    from pinginfoview.settings import HistoryMode
+    from NetInfoView.settings import HistoryMode
 
     window._set_history_mode(HistoryMode.FAILED_ONLY)
     (entry,) = _add(window, "10.0.0.1")
@@ -128,7 +128,7 @@ def test_graph_freezes_on_stop_and_resumes_on_start(window, monkeypatch):
         def stop_pinging(self):
             pass
 
-    monkeypatch.setattr("pinginfoview.ui.main_window.EngineThread", FakeEngine)
+    monkeypatch.setattr("NetInfoView.ui.main_window.EngineThread", FakeEngine)
     (entry,) = _add(window, "10.0.0.1")
     graph = window.open_graph(entry.key)
     assert graph.frozen  # opened before pinging ever started
@@ -200,8 +200,8 @@ def test_panel_remove_button_drops_just_that_host(window):
 
 
 def test_rolling_loss_and_jitter():
-    from pinginfoview.model.samples import Sample
-    from pinginfoview.ui.ping_graph import rolling_jitter, rolling_loss_percent
+    from NetInfoView.model.samples import Sample
+    from NetInfoView.ui.ping_graph import rolling_jitter, rolling_loss_percent
 
     samples = [Sample(1, 10), Sample(2, None), Sample(3, 20), Sample(4, 14)]
     assert rolling_loss_percent(samples, window=2) == [0, 50, 50, 0]

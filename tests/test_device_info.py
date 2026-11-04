@@ -1,7 +1,7 @@
 import pytest
 
-import pinginfoview.ping.device_info as device_info
-from pinginfoview.ping.device_info import DeviceInfoJob, DeviceInfoResult
+import NetInfoView.ping.device_info as device_info
+from NetInfoView.ping.device_info import DeviceInfoJob, DeviceInfoResult
 
 
 @pytest.fixture(autouse=True)
@@ -152,7 +152,7 @@ def test_empty_snapshot_returns_empty_results():
 def test_locally_administered_mac_reports_private_label_without_db_lookup(monkeypatch):
     """A randomized MAC (e.g. iOS/macOS "Private Wi-Fi address") was never
     assigned to any vendor, so it should never even reach the database."""
-    from pinginfoview.fileio.vendor_db import PRIVATE_MAC_LABEL
+    from NetInfoView.fileio.vendor_db import PRIVATE_MAC_LABEL
 
     monkeypatch.setattr(device_info.hostname_lookup, "resolve", lambda ip: "")
     db = FakeVendorDB()

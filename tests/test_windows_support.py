@@ -6,15 +6,15 @@ import sys
 
 import pytest
 
-from pinginfoview.app_update import WINDOWS_ASSET_SUFFIX, parse_release
-from pinginfoview.ping import arp
-from pinginfoview.ping.icmp_windows import (
+from NetInfoView.app_update import WINDOWS_ASSET_SUFFIX, parse_release
+from NetInfoView.ping import arp
+from NetInfoView.ping.icmp_windows import (
     IcmpWindowsPinger,
     ip_to_ipaddr,
     ipaddr_to_ip,
     status_for_ip_status,
 )
-from pinginfoview.ping.result import PingStatus
+from NetInfoView.ping.result import PingStatus
 
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="calls Windows APIs")
 
@@ -64,8 +64,8 @@ def test_parse_release_picks_the_windows_installer():
     data = {
         "tag_name": "v1.4",
         "assets": [
-            {"name": "NetInfo-1.4-arm64.zip", "browser_download_url": "https://x/mac.zip"},
-            {"name": f"NetInfo-1.4{WINDOWS_ASSET_SUFFIX}", "browser_download_url": "https://x/win.exe"},
+            {"name": "NetInfoView-1.4-arm64.zip", "browser_download_url": "https://x/mac.zip"},
+            {"name": f"NetInfoView-1.4{WINDOWS_ASSET_SUFFIX}", "browser_download_url": "https://x/win.exe"},
         ],
     }
     assert parse_release(data, windows=True).asset_url == "https://x/win.exe"
@@ -102,7 +102,7 @@ def test_real_ping_to_unroutable_address_times_out():
 
 @windows_only
 def test_windows_nameservers_returns_addresses():
-    from pinginfoview.ping.dns_ptr import windows_nameservers
+    from NetInfoView.ping.dns_ptr import windows_nameservers
 
     servers = windows_nameservers()
     assert isinstance(servers, list)
@@ -111,7 +111,7 @@ def test_windows_nameservers_returns_addresses():
 
 @windows_only
 def test_list_interfaces_on_windows():
-    from pinginfoview.ping.network_interfaces import list_interfaces
+    from NetInfoView.ping.network_interfaces import list_interfaces
 
     for interface in list_interfaces():
         assert interface.cidr.count("/") == 1
@@ -134,7 +134,7 @@ def test_list_interfaces_on_windows():
     ],
 )
 def test_echo_statuses_become_trace_replies(status, source, kind):
-    from pinginfoview.ping.tracepath import reply_for_status
+    from NetInfoView.ping.tracepath import reply_for_status
 
     reply = reply_for_status(status, source)
     assert reply.kind == kind
@@ -146,8 +146,8 @@ def test_echo_statuses_become_trace_replies(status, source, kind):
 def test_a_frag_without_an_mtu_is_searched_for():
     """IcmpSendEcho doesn't pass on the MTU a router names, so the drop is
     found by search, and pinned on the hop all the same."""
-    from pinginfoview.ping import tracepath
-    from pinginfoview.ping.tracepath import FRAG, REACHED, Reply
+    from NetInfoView.ping import tracepath
+    from NetInfoView.ping.tracepath import FRAG, REACHED, Reply
 
     def probe(ip, ttl, payload):
         return Reply(REACHED, "10.0.0.9") if payload + tracepath.HEADERS <= 1400 else Reply(FRAG)
@@ -159,7 +159,7 @@ def test_a_frag_without_an_mtu_is_searched_for():
 
 @windows_only
 def test_real_mtu_probe_on_windows():
-    from pinginfoview.ping import mtu
+    from NetInfoView.ping import mtu
 
     assert mtu.probe("127.0.0.1", 1473)
     assert mtu.find_mtu("127.0.0.1") == mtu.MAX_MTU
@@ -167,14 +167,14 @@ def test_real_mtu_probe_on_windows():
 
 @windows_only
 def test_loopback_sets_no_link_mtu_ceiling():
-    from pinginfoview.ping.icmp_windows import link_mtu
+    from NetInfoView.ping.icmp_windows import link_mtu
 
     assert link_mtu("127.0.0.1") is None
 
 
 @windows_only
 def test_link_mtu_of_the_default_route():
-    from pinginfoview.ping.icmp_windows import link_mtu
+    from NetInfoView.ping.icmp_windows import link_mtu
 
     found = link_mtu("8.8.8.8")
     assert found is None or 576 <= found <= 65535
@@ -188,7 +188,7 @@ ARIN_8888 = "NetRange:       8.8.8.0 - 8.8.8.255\nNetName:        GOGL\n"
 
 
 def test_direct_whois_follows_ianas_referral():
-    from pinginfoview.ping import whois
+    from NetInfoView.ping import whois
 
     asked = []
 
@@ -202,7 +202,7 @@ def test_direct_whois_follows_ianas_referral():
 
 
 def test_direct_whois_follows_arins_referral_server_once():
-    from pinginfoview.ping import whois
+    from NetInfoView.ping import whois
 
     answers = {
         "whois.iana.org": "refer: whois.arin.net\n",
@@ -221,7 +221,7 @@ def test_direct_whois_follows_arins_referral_server_once():
 
 
 def test_direct_whois_to_a_named_server_asks_only_it():
-    from pinginfoview.ping import whois
+    from NetInfoView.ping import whois
 
     asked = []
     whois.query_direct(" -v 8.8.8.8", whois.CYMRU,
@@ -230,7 +230,7 @@ def test_direct_whois_to_a_named_server_asks_only_it():
 
 
 def test_whois_referral_forms():
-    from pinginfoview.ping.whois import referral
+    from NetInfoView.ping.whois import referral
 
     assert referral("refer:        whois.apnic.net\n") == ("whois.apnic.net", 43)
     assert referral("ReferralServer:  whois://whois.ripe.net\n") == ("whois.ripe.net", 43)
@@ -243,7 +243,7 @@ def test_whois_referral_forms():
 
 
 def test_npcap_connection_status():
-    from pinginfoview.ping import npcap
+    from NetInfoView.ping import npcap
 
     assert npcap.is_connected(npcap.PCAP_IF_CONNECTION_STATUS_CONNECTED)
     assert not npcap.is_connected(0x20 | npcap.PCAP_IF_UP | npcap.PCAP_IF_RUNNING)
@@ -253,8 +253,8 @@ def test_npcap_connection_status():
 
 
 def test_npcap_adapters_are_named_as_windows_names_them(monkeypatch):
-    from pinginfoview.ping import network_interfaces as ni
-    from pinginfoview.ping import npcap
+    from NetInfoView.ping import network_interfaces as ni
+    from NetInfoView.ping import npcap
 
     monkeypatch.setattr(npcap, "devices", lambda: [
         npcap.Device(r"\Device\NPF_{W}", "Intel(R) Wi-Fi 6 AX201", ("192.168.1.5",), True, True),
@@ -272,8 +272,8 @@ def test_npcap_adapters_are_named_as_windows_names_them(monkeypatch):
 
 
 def test_without_npcap_there_are_no_adapters(monkeypatch):
-    from pinginfoview.ping import network_interfaces as ni
-    from pinginfoview.ping import npcap
+    from NetInfoView.ping import network_interfaces as ni
+    from NetInfoView.ping import npcap
 
     def missing():
         raise npcap.NpcapError(npcap.NOT_INSTALLED)
@@ -283,7 +283,7 @@ def test_without_npcap_there_are_no_adapters(monkeypatch):
 
 
 def test_npcap_listen_reports_each_switch_port_once(monkeypatch):
-    from pinginfoview.ping import lldp_cdp, npcap
+    from NetInfoView.ping import lldp_cdp, npcap
     from test_lldp_cdp import cdp_frame, lldp_frame
 
     frames = {"good": [lldp_frame(), None, lldp_frame(), cdp_frame()]}
@@ -314,6 +314,6 @@ def test_npcap_listen_reports_each_switch_port_once(monkeypatch):
 def test_downloads_are_verified_by_the_operating_system():
     import truststore
 
-    from pinginfoview.https import ssl_context
+    from NetInfoView.https import ssl_context
 
     assert isinstance(ssl_context(), truststore.SSLContext)

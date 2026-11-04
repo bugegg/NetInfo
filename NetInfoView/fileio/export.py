@@ -46,7 +46,7 @@ class ExportFormat(str, Enum):
         }[self]
 
 
-TITLE = "NetInfo"
+TITLE = "NetInfoView"
 
 
 def render(
@@ -149,7 +149,7 @@ def _html_document(body: str) -> str:
         "<html>\n<head>\n<meta charset=\"utf-8\">\n"
         f"<title>{TITLE}</title>\n<style>{_STYLE}</style>\n</head>\n<body>\n"
         f"<h3>{TITLE}</h3>\n{body}"
-        f"<p>Created by NetInfo on {generated}</p>\n</body>\n</html>\n"
+        f"<p>Created by NetInfoView on {generated}</p>\n</body>\n</html>\n"
     )
 
 

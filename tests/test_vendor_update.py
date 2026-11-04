@@ -2,7 +2,7 @@ import urllib.error
 
 import pytest
 
-from pinginfoview.ping.vendor_update import (
+from NetInfoView.ping.vendor_update import (
     VendorUpdateError,
     parse_oui_csv,
     run_update,
@@ -52,7 +52,7 @@ def test_run_update_stores_rows_via_vendor_db(monkeypatch):
             return len(rows)
 
     monkeypatch.setattr(
-        "pinginfoview.ping.vendor_update.fetch_oui_csv", lambda url=None: SAMPLE_CSV
+        "NetInfoView.ping.vendor_update.fetch_oui_csv", lambda url=None: SAMPLE_CSV
     )
     count = run_update(FakeVendorDB())
     assert count == 2
@@ -70,7 +70,7 @@ def test_fetch_failure_raises_vendor_update_error(monkeypatch):
         raise urllib.error.URLError("no network")
 
     monkeypatch.setattr(urllib.request, "urlopen", raise_url_error)
-    from pinginfoview.ping.vendor_update import fetch_oui_csv
+    from NetInfoView.ping.vendor_update import fetch_oui_csv
 
     with pytest.raises(VendorUpdateError):
         fetch_oui_csv()

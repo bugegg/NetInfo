@@ -11,10 +11,13 @@ from enum import Enum
 
 from .ping.port_scan import DEFAULT_PORTS_TEXT as _DEFAULT_PORT_SCAN_PORTS
 
-#: Where settings and the vendor database are stored. These keep the app's
-#: original name so renaming it to NetInfo didn't lose anyone's settings.
-ORGANISATION = "pinginfoview"
-APPLICATION = "PingInfoView"
+#: Where settings and the vendor database are stored.
+ORGANISATION = "NetInfoView"
+APPLICATION = "NetInfoView"
+#: Where releases up to 1.4 stored them, under the app's original name.
+#: migrate_legacy_settings() and vendor_db.migrate_legacy_db() carry them over.
+LEGACY_ORGANISATION = "pinginfoview"
+LEGACY_APPLICATION = "PingInfoView"
 
 
 class DisplayMode(str, Enum):
@@ -119,6 +122,23 @@ class Settings:
                 pass  # keep the default rather than fail to start
         return loaded.sanitised()
 
+
+
+def migrate_legacy_settings(store=None, legacy=None) -> bool:
+    """Copy settings saved under the old PingInfoView name into the new
+    store, once: only when the new one is still empty. The old store is
+    left alone so an older build still finds its settings. Returns True
+    if anything was copied."""
+    from PyQt6.QtCore import QSettings
+
+    store = store if store is not None else QSettings(ORGANISATION, APPLICATION)
+    legacy = legacy if legacy is not None else QSettings(LEGACY_ORGANISATION, LEGACY_APPLICATION)
+    if store.allKeys() or not legacy.allKeys():
+        return False
+    for key in legacy.allKeys():
+        store.setValue(key, legacy.value(key))
+    store.sync()
+    return True
 
 def _coerce(field_type: object, value: object):
     """QSettings hands everything back as a string; put it back in its type."""

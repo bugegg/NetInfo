@@ -2,8 +2,8 @@
 
 import time
 
-from pinginfoview.ping import hostname, mtu
-from pinginfoview.ping.parallel import first_answer
+from NetInfoView.ping import hostname, mtu
+from NetInfoView.ping.parallel import first_answer
 
 
 def test_first_answer_keeps_list_order_but_runs_at_once():

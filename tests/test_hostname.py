@@ -3,8 +3,8 @@ import subprocess
 
 import pytest
 
-from pinginfoview.ping import hostname
-from pinginfoview.ping.hostname import resolve
+from NetInfoView.ping import hostname
+from NetInfoView.ping.hostname import resolve
 
 DSCACHEUTIL_OUTPUT = (
     "name: device.local\n"

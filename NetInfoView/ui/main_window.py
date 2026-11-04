@@ -92,7 +92,7 @@ class MainWindow(QMainWindow):
         #: Attempts made so far per host key, capped at DEVICE_INFO_MAX_ATTEMPTS.
         self._device_info_attempts: dict[int, int] = {}
 
-        self.setWindowTitle("NetInfo")
+        self.setWindowTitle("NetInfoView")
         self.resize(1100, 620)
 
         self._model = HostTableModel()
@@ -132,7 +132,7 @@ class MainWindow(QMainWindow):
         self._device_info_timer.start(DEVICE_INFO_REFRESH_MS)
 
         # Only the packaged app can replace itself; running from source, the
-        # check is left to Check for Updates in the right-click menu.
+        # check is left to the Check for Updates toolbar button.
         if self_update_supported():
             QTimer.singleShot(
                 UPDATE_CHECK_DELAY_MS, lambda: self.check_for_updates(silent=True)
@@ -337,7 +337,12 @@ class MainWindow(QMainWindow):
         self.action_clear_history = QAction("&Clear Lower Pane", self)
         self.action_clear_history.triggered.connect(self._history.clear)
 
-        self.action_check_updates = QAction("Check for &Updates...", self)
+        self.action_check_updates = QAction(
+            self._icon(sp.SP_ArrowUp), "Check for &Updates...", self
+        )
+        self.action_check_updates.setToolTip(
+            "Check GitHub for a newer version of NetInfoView and install it"
+        )
         self.action_check_updates.triggered.connect(lambda: self.check_for_updates())
 
         self.action_about = QAction("&About", self)
@@ -361,8 +366,9 @@ class MainWindow(QMainWindow):
         """Everything that used to live in the top menu bar, and then in the
         toolbar's dropdown, ends up here instead: the table's own right-click
         menu. Options keeps a dedicated toolbar button that opens its dialog
-        directly (no dropdown at all), and Update MAC Vendor Database keeps
-        its own toolbar button too, so neither is duplicated here.
+        directly (no dropdown at all), and Update MAC Vendor Database and
+        Check for Updates keep their own toolbar buttons too, so none of them
+        is duplicated here.
         """
         self._table.addAction(self.action_copy)
         self._table.addAction(self.action_properties)
@@ -428,7 +434,6 @@ class MainWindow(QMainWindow):
         self._table.addAction(lower.menuAction())
 
         self._add_table_separator()
-        self._table.addAction(self.action_check_updates)
         self._table.addAction(self.action_about)
 
     def _build_toolbar(self) -> None:
@@ -439,6 +444,7 @@ class MainWindow(QMainWindow):
             self.action_add, self.action_clear_all, None,
             self.action_lldp_cdp, None,
             self.action_options, self.action_update_vendor_db,
+            self.action_check_updates,
         ):
             toolbar.addSeparator() if action is None else toolbar.addAction(action)
         # The other buttons' icons say what they do; this one needs its label.
@@ -1148,14 +1154,14 @@ class MainWindow(QMainWindow):
             if not silent:
                 QMessageBox.information(
                     self, "Check for Updates",
-                    f"NetInfo {__version__} is the latest version.",
+                    f"NetInfoView {__version__} is the latest version.",
                 )
             return
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Information)
         box.setWindowTitle("Update Available")
         box.setText(
-            f"NetInfo {release.version} is available "
+            f"NetInfoView {release.version} is available "
             f"(you have {__version__})."
         )
         if release.notes:
@@ -1163,7 +1169,7 @@ class MainWindow(QMainWindow):
         can_install = self_update_supported() and bool(release.asset_url)
         if can_install:
             box.setInformativeText(
-                "Install it now? NetInfo will restart; your settings are kept."
+                "Install it now? NetInfoView will restart; your settings are kept."
             )
             install = box.addButton("Install and Restart", QMessageBox.ButtonRole.AcceptRole)
         else:
@@ -1193,7 +1199,7 @@ class MainWindow(QMainWindow):
 
     def _start_update_download(self, release: Release) -> None:
         self.action_check_updates.setEnabled(False)
-        self.statusBar().showMessage(f"Downloading NetInfo {release.version}...")
+        self.statusBar().showMessage(f"Downloading NetInfoView {release.version}...")
         thread = UpdateDownloadThread(release)
         thread.downloaded.connect(self._on_update_downloaded)
         thread.failed.connect(self._on_update_download_failed)
@@ -1235,8 +1241,8 @@ class MainWindow(QMainWindow):
             )
         QMessageBox.about(
             self,
-            "About NetInfo",
-            f"<b>NetInfo {__version__}</b><br>A ping monitor for macOS.<br><br>"
+            "About NetInfoView",
+            f"<b>NetInfoView {__version__}</b><br>A ping monitor for macOS.<br><br>"
             "Pings many hosts on an interval over ICMP or TCP and reports "
             "per-host statistics.<br><br>"
             "A clean-room reimplementation of NirSoft's PingInfoView for Windows.<br><br>"

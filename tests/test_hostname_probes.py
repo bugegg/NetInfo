@@ -8,7 +8,7 @@ import threading
 
 import pytest
 
-from pinginfoview.ping import ber, http_title, ntlm, snmp, ssdp, tls_cert
+from NetInfoView.ping import ber, http_title, ntlm, snmp, ssdp, tls_cert
 
 
 # --- NTLM (SMB / RDP) ---

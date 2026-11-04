@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import sqlite3
 import threading
 from collections.abc import Iterable
 from pathlib import Path
 
 from ..osinfo import IS_WINDOWS
-from ..settings import APPLICATION
+from ..settings import APPLICATION, LEGACY_APPLICATION
 
 _HEX_PREFIX = re.compile(r"[0-9A-Fa-f]{6,}")
 
@@ -39,13 +40,37 @@ CREATE TABLE IF NOT EXISTS meta (
 PRIVATE_MAC_LABEL = "(Private/Randomized MAC)"
 
 
-def default_db_path() -> Path:
-    """``~/Library/Application Support/PingInfoView/vendor.sqlite`` on macOS,
-    ``%APPDATA%\\PingInfoView\\vendor.sqlite`` on Windows."""
+def _app_data_dir() -> Path:
     if IS_WINDOWS:
-        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
-        return base / APPLICATION / "vendor.sqlite"
-    return Path.home() / "Library" / "Application Support" / APPLICATION / "vendor.sqlite"
+        return Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+    return Path.home() / "Library" / "Application Support"
+
+
+def default_db_path() -> Path:
+    """``~/Library/Application Support/NetInfoView/vendor.sqlite`` on macOS,
+    ``%APPDATA%\\NetInfoView\\vendor.sqlite`` on Windows."""
+    return _app_data_dir() / APPLICATION / "vendor.sqlite"
+
+
+def legacy_db_path() -> Path:
+    """Where releases up to 1.4 kept it, under the old PingInfoView name."""
+    return _app_data_dir() / LEGACY_APPLICATION / "vendor.sqlite"
+
+
+def migrate_legacy_db(dest: Path | None = None, legacy: Path | None = None) -> bool:
+    """Copy the vendor database from the old location if there's none at
+    the new one yet. The old file is kept for older builds. Returns True
+    if it copied; never raises (worst case, the user re-downloads it)."""
+    dest = dest or default_db_path()
+    legacy = legacy or legacy_db_path()
+    if dest.exists() or not legacy.is_file():
+        return False
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(legacy, dest)
+    except OSError:
+        return False
+    return True
 
 
 def normalise_prefix(mac: str) -> str:

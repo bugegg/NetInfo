@@ -1,7 +1,7 @@
 """Tests for the lower pane's history model and host filter."""
 
-from pinginfoview.model.history import HistoryFilterProxy, HistoryModel, HistoryRecord
-from pinginfoview.ping.result import PingStatus
+from NetInfoView.model.history import HistoryFilterProxy, HistoryModel, HistoryRecord
+from NetInfoView.ping.result import PingStatus
 
 
 def _record(key: int, ip: str = "192.168.1.1") -> HistoryRecord:

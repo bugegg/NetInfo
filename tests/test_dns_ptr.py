@@ -4,7 +4,7 @@ import socket
 import struct
 import threading
 
-from pinginfoview.ping import dns_ptr
+from NetInfoView.ping import dns_ptr
 
 
 def _reply(query: bytes, name: str | None, rcode: int = 0) -> bytes:

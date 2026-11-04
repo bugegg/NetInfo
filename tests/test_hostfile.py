@@ -1,6 +1,6 @@
 import pytest
 
-from pinginfoview.fileio.hostfile import format_host_list, parse_host_list
+from NetInfoView.fileio.hostfile import format_host_list, parse_host_list
 
 
 def test_plain_host_and_description():
@@ -118,7 +118,7 @@ def test_unparseable_tokens_fall_back_to_a_plain_host(token):
 def test_ranges_over_the_limit_are_refused_without_expanding():
     import time
 
-    from pinginfoview.fileio.hostfile import HostListError
+    from NetInfoView.fileio.hostfile import HostListError
 
     started = time.perf_counter()
     for text in ("192.168.1.0/2", "10.0.0.0/8", "10.0.0.0-10.255.255.255"):
@@ -132,7 +132,7 @@ def test_a_slash_16_is_still_allowed():
 
 
 def test_has_hosts_ignores_blank_group_and_bare_hash_lines():
-    from pinginfoview.fileio.hostfile import has_hosts
+    from NetInfoView.fileio.hostfile import has_hosts
 
     assert not has_hosts("")
     assert not has_hosts("  \nGroup: A\n#\n")

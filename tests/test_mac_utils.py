@@ -1,6 +1,6 @@
 import pytest
 
-from pinginfoview.ping.arp import is_locally_administered
+from NetInfoView.ping.arp import is_locally_administered
 
 # Every MAC prefix that showed a vendor or not in the user's real screenshot,
 # used here as a cross-check that the U/L bit math matches reality exactly.

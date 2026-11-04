@@ -1,6 +1,6 @@
 """Which OS the app runs on, and helpers that differ between them.
 
-NetInfo began as a macOS app. On Windows every feature works too, through
+NetInfoView began as a macOS app. On Windows every feature works too, through
 Windows' own APIs where macOS uses its command-line tools; Check LLDP/CDP
 additionally needs Npcap (https://npcap.com) installed.
 """

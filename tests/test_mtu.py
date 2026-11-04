@@ -3,9 +3,9 @@
 import pytest
 from PyQt6.QtWidgets import QApplication
 
-from pinginfoview.model.columns import COLUMN_BY_KEY
-from pinginfoview.model.host import HostEntry
-from pinginfoview.ping import mtu
+from NetInfoView.model.columns import COLUMN_BY_KEY
+from NetInfoView.model.host import HostEntry
+from NetInfoView.ping import mtu
 
 
 @pytest.fixture(scope="session")
@@ -94,13 +94,13 @@ def test_real_ping_reaches_loopback():
 
 
 def test_mtu_is_checked_automatically_once_a_host_answers(qapp, tmp_path, monkeypatch):
-    from pinginfoview.fileio.hostfile import parse_host_list
-    from pinginfoview.ping.result import PingResult, PingStatus
-    from pinginfoview.settings import Settings
-    from pinginfoview.ui.main_window import MainWindow
+    from NetInfoView.fileio.hostfile import parse_host_list
+    from NetInfoView.ping.result import PingResult, PingStatus
+    from NetInfoView.settings import Settings
+    from NetInfoView.ui.main_window import MainWindow
 
     monkeypatch.setattr(
-        "pinginfoview.fileio.vendor_db.default_db_path", lambda: tmp_path / "v.sqlite"
+        "NetInfoView.fileio.vendor_db.default_db_path", lambda: tmp_path / "v.sqlite"
     )
     started = []
     monkeypatch.setattr(MainWindow, "_start_mtu_check",
@@ -123,12 +123,12 @@ def test_mtu_is_checked_automatically_once_a_host_answers(qapp, tmp_path, monkey
 
 
 def test_check_mtu_fills_the_column(qapp, tmp_path, monkeypatch):
-    from pinginfoview.fileio.hostfile import parse_host_list
-    from pinginfoview.settings import Settings
-    from pinginfoview.ui.main_window import MainWindow
+    from NetInfoView.fileio.hostfile import parse_host_list
+    from NetInfoView.settings import Settings
+    from NetInfoView.ui.main_window import MainWindow
 
     monkeypatch.setattr(
-        "pinginfoview.fileio.vendor_db.default_db_path", lambda: tmp_path / "v.sqlite"
+        "NetInfoView.fileio.vendor_db.default_db_path", lambda: tmp_path / "v.sqlite"
     )
     win = MainWindow(Settings())
     try:
