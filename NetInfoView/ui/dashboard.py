@@ -909,6 +909,7 @@ def apply_theme(window) -> None:
             selection-color: {c['selected_ink']}; outline: 0; font-size: 12px; }}
         QTableView#historyGrid {{ border: none; font-size: 12px; }}
         QTableView::item {{ padding: 0 8px; border-bottom: 1px solid {c['border']}; }}
+        QTableView::item:selected {{ background: {c['select']}; color: {c['selected_ink']}; }}
         QHeaderView::section {{ background: {c['surface']}; color: {c['ink']}; border: none;
             border-bottom: 1px solid {c['border']}; border-right: 1px solid {c['border']};
             padding: 4px 8px; }}
