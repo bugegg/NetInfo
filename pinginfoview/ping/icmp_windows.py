@@ -203,6 +203,9 @@ def echo(ip: str, timeout_ms: int, payload_size: int, ttl: int = 64,
     return send_echo(_shared_api, ip, timeout_ms, payload_size, ttl, dont_fragment)
 
 
+IF_TYPE_SOFTWARE_LOOPBACK = 24
+
+
 class _MIB_IFROW(ctypes.Structure):
     _fields_ = [
         ("wszName", ctypes.c_wchar * 256),
@@ -235,5 +238,7 @@ def link_mtu(ip: str) -> int | None:
             return None
     except (OSError, AttributeError):
         return None
-    # The loopback pseudo-interface reports 0xFFFFFFFF: no limit worth using.
+    # The loopback pseudo-interface reports 1500 but carries far more.
+    if row.dwType == IF_TYPE_SOFTWARE_LOOPBACK:
+        return None
     return row.dwMtu if 0 < row.dwMtu < 0xFFFF else None

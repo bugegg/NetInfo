@@ -141,10 +141,8 @@ def test_trace_stops_when_a_router_says_unreachable():
 def test_real_trace_to_loopback():
     hops = []
     tracepath.trace("127.0.0.1", hops.append)
-    from test_mtu import LOOPBACK_MTU
-
     assert [(h.address, h.mtu, h.reached) for h in hops] == [
-        ("127.0.0.1", LOOPBACK_MTU, True)
+        ("127.0.0.1", tracepath.MAX_MTU, True)
     ]
 
 

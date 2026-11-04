@@ -1,18 +1,11 @@
 """Tests for Check MTU's path MTU search (ping/mtu.py)."""
 
-import sys
-
 import pytest
 from PyQt6.QtWidgets import QApplication
 
 from pinginfoview.model.columns import COLUMN_BY_KEY
 from pinginfoview.model.host import HostEntry
 from pinginfoview.ping import mtu
-
-#: What a DF ping to loopback can reach: macOS's lo0 (MTU 16384) carries
-#: more than an unprivileged ping can send; Windows stops DF pings to
-#: loopback at Ethernet's 1500.
-LOOPBACK_MTU = 1500 if sys.platform == "win32" else mtu.MAX_MTU
 
 
 @pytest.fixture(scope="session")
@@ -96,7 +89,8 @@ def test_mtu_column_text():
 
 
 def test_real_ping_reaches_loopback():
-    assert mtu.find_mtu("127.0.0.1") == LOOPBACK_MTU
+    # Loopback's MTU is 16384, more than an unprivileged ping can send.
+    assert mtu.find_mtu("127.0.0.1") == mtu.MAX_MTU
 
 
 def test_mtu_is_checked_automatically_once_a_host_answers(qapp, tmp_path, monkeypatch):
@@ -145,7 +139,7 @@ def test_check_mtu_fills_the_column(qapp, tmp_path, monkeypatch):
         win.check_mtu()
         win._mtu_thread.wait(10000)
         QApplication.processEvents()  # deliver the queued result
-        assert entry.mtu == LOOPBACK_MTU
+        assert entry.mtu == mtu.MAX_MTU
     finally:
         win._vendor_db.close()
         win.deleteLater()

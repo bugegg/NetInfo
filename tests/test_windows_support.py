@@ -161,9 +161,15 @@ def test_a_frag_without_an_mtu_is_searched_for():
 def test_real_mtu_probe_on_windows():
     from pinginfoview.ping import mtu
 
-    assert mtu.probe("127.0.0.1", 1472)
-    assert not mtu.probe("127.0.0.1", 1473)  # Windows caps DF loopback at 1500
-    assert mtu.find_mtu("127.0.0.1") == 1500
+    assert mtu.probe("127.0.0.1", 1473)
+    assert mtu.find_mtu("127.0.0.1") == mtu.MAX_MTU
+
+
+@windows_only
+def test_loopback_sets_no_link_mtu_ceiling():
+    from pinginfoview.ping.icmp_windows import link_mtu
+
+    assert link_mtu("127.0.0.1") is None
 
 
 @windows_only
