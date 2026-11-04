@@ -39,9 +39,9 @@ GREEN = "#16a34a"
 AMBER = "#d97706"
 RED = "#e5383b"
 BLUE = "#087dff"
-HEALTH_COLORS = {"ok": GREEN, "partial": AMBER, "down": RED}
-HEALTH_TEXT = {"ok": "Reachable", "partial": "Partly reachable", "down": "Unreachable"}
-HEALTH_FILLS = {"ok": "#dcf6e4", "partial": "#fef3c7", "down": "#fde2e2"}
+#: The status pill: SolarWinds' words for a path's worst hop or link.
+LEVEL_TEXT = {"ok": "Up", "warn": "Warning", "crit": "Critical"}
+LEVEL_FILLS = {"ok": "#dcf6e4", "warn": "#fef3c7", "crit": "#fde2e2"}
 LEVEL_COLORS = {netpath.OK: GREEN, netpath.WARN: AMBER, netpath.CRIT: RED}
 
 LIGHT = dict(bg="#f6f7f9", surface="#ffffff", ink="#16191f", muted="#5f6673", border="#e3e5e9")
@@ -252,6 +252,7 @@ class HistoryStrip(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        #: Each trace's level (ok / warn / crit): its worst hop or link.
         self.healths: list[str] = []
         self.selected = -1
         self.colors = LIGHT
@@ -268,7 +269,7 @@ class HistoryStrip(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         for i in range(HISTORY):
             rect = QRectF(i * cell + 1, 3, cell - 2, self.height() - 6)
-            color = (QColor(HEALTH_COLORS[self.healths[i]]) if i < len(self.healths)
+            color = (QColor(LEVEL_COLORS[self.healths[i]]) if i < len(self.healths)
                      else QColor(self.colors["border"]))
             painter.setBrush(color)
             painter.drawRoundedRect(rect, 2, 2)
@@ -455,7 +456,7 @@ class NetPathWindow(QWidget):
             del self.sweeps[0]
             del self.graphs[0]
             self.shown -= 1
-        self.history.healths = [netpath.health(s) for s in self.sweeps]
+        self.history.healths = [self.trace_level(g)[0] for g in self.graphs]
         status = self._summary(result)
         if self._thread is not None and self._thread.live:
             status += f" · next trace in {LIVE_INTERVAL} s"
@@ -482,17 +483,24 @@ class NetPathWindow(QWidget):
         stamp = datetime.fromtimestamp(result.started).strftime("%Y-%m-%d %H:%M:%S")
         self.history_text.setText(f"Showing {stamp}" + ("" if self._follow else " · click the "
                                                        "last block to follow live"))
-        self._set_health(netpath.health(result))
+        self._set_health(*self.trace_level(self.graphs[index]))
         self.render(self.graphs[index])
 
-    def _set_health(self, health: str | None) -> None:
-        if health is None:
+    def trace_level(self, graph: PathGraph) -> tuple[str, list[str]]:
+        """A whole trace's level, its worst hop or link, and why."""
+        found = [self.node_condition(graph, key) for key in graph.nodes]
+        level = netpath.worst(*(lv for lv, _ in found))
+        return level, [reason for lv, reasons in found if lv != netpath.OK for reason in reasons]
+
+    def _set_health(self, level: str | None, reasons: list[str] | None = None) -> None:
+        if level is None:
             self.health.setText("Tracing…")
             self.health.setStyleSheet(f"color: {self.colors['muted']};")
             return
-        color = HEALTH_COLORS[health]
-        self.health.setText(f"●  {HEALTH_TEXT[health]}")
-        self.health.setStyleSheet(f"color: {color}; background: {HEALTH_FILLS[health]};")
+        color = LEVEL_COLORS[level]
+        self.health.setText(f"●  {LEVEL_TEXT[level]}")
+        self.health.setToolTip("\n".join(reasons or []) or "Every hop and link within thresholds")
+        self.health.setStyleSheet(f"color: {color}; background: {LEVEL_FILLS[level]};")
 
     def render(self, graph: PathGraph) -> None:
         self.graph = graph

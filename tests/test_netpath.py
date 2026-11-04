@@ -147,7 +147,7 @@ def test_window_shows_the_graph_history_and_details(qapp, monkeypatch):
     assert len(window.sweeps) == 1
     assert window.items["10.0.2.1"].title == "core.example"
     assert window.names["10.0.0.1"] == ""  # looked up, nothing found
-    assert window.history.healths == ["ok"]
+    assert window.history.healths == ["ok"] and window.health.text() == "●  Up"
     assert set(window.items) == set(window.graph.nodes)
     assert window.details_title.text() == "Path overview"
     window.items["10.0.0.1"].setSelected(True)
@@ -158,7 +158,8 @@ def test_window_shows_the_graph_history_and_details(qapp, monkeypatch):
     window._on_name("10.0.0.1", "gw.example")
     assert window.items["10.0.0.1"].title == "gw.example"
     window.add_sweep(Sweep(1, 4, [[Answer("10.0.0.1", 1)]] * 4))
-    assert window.history.healths == ["ok", "down"] and window.shown == 1
+    assert window.history.healths == ["ok", "crit"] and window.shown == 1
+    assert window.health.text() == "●  Critical"
     window.show_sweep(0)
     assert window.shown == 0 and not window._follow
     window.close()
@@ -201,6 +202,8 @@ def test_hops_and_links_are_colored_by_the_netpath_thresholds(qapp, monkeypatch)
     assert window.edge_condition(graph, graph.edges[("10.0.0.1", "10.0.1.1")])[0] == "warn"
     assert window.node_condition(graph, "10.0.0.1") == ("ok", [])
     assert window.items["10.0.1.1"].ring.name() == nw.AMBER
+    # The history block and the status pill take the trace's worst hop.
+    assert window.history.healths == ["ok", "warn"] and window.health.text() == "●  Warning"
     assert "Hop 2 (10.0.1.1): Link latency 40 ms" in window.details_grid.itemAtPosition(
         window.details_grid.rowCount() - 1, 1).widget().text()
     window.add_sweep(Sweep(1, 2, [_route(121), _route(121)]))  # 120 ms: critical
