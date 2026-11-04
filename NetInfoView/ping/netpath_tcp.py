@@ -19,8 +19,9 @@ so no privileges are needed to send it. What comes back:
   answered;
 * an ICMP Time Exceeded from a router, quoting the SYN's ports: read on
   macOS from an unprivileged ICMP datagram socket, which is handed the ICMP
-  errors about this host's TCP packets too; on Windows from a raw ICMP
-  socket (run as administrator) or else through Npcap.
+  errors about this host's TCP packets too; on Windows through Npcap, or
+  else a raw ICMP socket (run as administrator; Windows Firewall may keep
+  the errors from it).
 """
 
 from __future__ import annotations
@@ -52,6 +53,13 @@ _WSAECONNREFUSED = 10061
 
 class TcpUnavailable(OSError):
     """TCP probes can't be used on this computer, and why."""
+
+
+#: Why a TCP trace that heard nothing at all is taken for a local block.
+UNHEARD = ("No router answered the TCP probes, not even the first: "
+           + ("Windows Firewall may be blocking the routers' ICMP replies "
+              "(installing Npcap avoids it)" if IS_WINDOWS
+              else "something on this computer may be blocking ICMP"))
 
 
 def quoted_tcp(packet: bytes) -> tuple[int, int, int, int] | None:
@@ -158,33 +166,43 @@ def local_address(ip: str) -> str:
 
 
 def open_listener(ip: str):
-    """Something to hear the routers' ICMP errors with, or TcpUnavailable."""
+    """Something to hear the routers' ICMP errors with, or TcpUnavailable.
+
+    On Windows Npcap comes first: it captures below Windows Firewall, which
+    keeps the routers' Time Exceeded for a TCP SYN from a raw socket (the
+    socket opens fine, then hears nothing). The raw socket is the fallback
+    for an administrator without Npcap, heard only if the firewall lets
+    those errors in."""
     if not IS_WINDOWS:
         try:
             return _SocketListener(socket.socket(socket.AF_INET, socket.SOCK_DGRAM,
                                                  socket.IPPROTO_ICMP))
         except OSError as error:
             raise TcpUnavailable(f"Can't open an ICMP socket: {error}") from error
+    from . import npcap
+
     local = local_address(ip)
+    reason = npcap.available()
+    if not reason:
+        try:
+            adapter = next((d.name for d in npcap.devices() if local in d.ipv4), "")
+        except OSError as error:
+            adapter, reason = "", f"Npcap couldn't list the adapters: {error}"
+        if adapter:
+            try:
+                return _NpcapListener(adapter)
+            except OSError as error:
+                reason = f"Npcap couldn't open the adapter: {error}"
+        elif not reason:
+            reason = f"Npcap has no adapter with the address {local or '?'}"
     try:  # a raw ICMP socket: Windows allows it to administrators
         raw = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
         raw.bind((local, 0))
         return _SocketListener(raw)
     except OSError:
         pass
-    from . import npcap
-
-    reason = npcap.available()
-    if reason:
-        raise TcpUnavailable("TCP probes need NetInfoView run as administrator, or Npcap: "
-                             + reason)
-    adapter = next((d.name for d in npcap.devices() if local in d.ipv4), "")
-    if not adapter:
-        raise TcpUnavailable(f"Npcap has no adapter with the address {local or '?'}")
-    try:
-        return _NpcapListener(adapter)
-    except OSError as error:
-        raise TcpUnavailable(f"Npcap couldn't open the adapter: {error}") from error
+    raise TcpUnavailable("TCP probes need Npcap, or NetInfoView run as administrator: "
+                         + reason)
 
 
 def unavailable(ip: str = "8.8.8.8") -> str:

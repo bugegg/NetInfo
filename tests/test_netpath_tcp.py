@@ -164,3 +164,42 @@ def test_changing_the_probe_starts_over(qapp, monkeypatch):
     window.port.editingFinished.emit()
     assert started[-1] == 22 and "port 22" in window.route_text.text()
     window.close()
+
+
+def test_a_tcp_trace_no_router_answers_falls_back_to_icmp(qapp, monkeypatch):
+    """Windows Firewall keeps the routers' ICMP errors from a raw socket: the
+    listener opens but hears nothing, which isn't a dead path."""
+    from PyQt6.QtWidgets import QApplication
+    from NetInfoView.ping import netpath
+    from NetInfoView.ui import netpath_window as nw
+
+    monkeypatch.setattr(TcpProber, "__call__", lambda self, ip, ttl, flows: {})
+    monkeypatch.setattr(netpath, "default_probe", lambda: lambda ip, ttl, flows: {})
+    window = nw.NetPathWindow("dns.google", "8.8.8.8", live=False)
+    assert window._thread.wait(5000)
+    QApplication.processEvents()
+    assert window.mode.currentText() == "ICMP"
+    assert "No router answered the TCP probes" in window.status.text()
+    assert window.sweeps == []  # the silent TCP trace isn't shown as Critical
+    assert window._thread.wait(5000)
+    QApplication.processEvents()
+    window.close()
+
+
+def test_windows_listens_through_npcap_before_a_raw_socket(monkeypatch):
+    from NetInfoView.ping import npcap
+
+    monkeypatch.setattr(netpath_tcp, "IS_WINDOWS", True)
+    monkeypatch.setattr(netpath_tcp, "local_address", lambda ip: "192.168.1.106")
+    monkeypatch.setattr(npcap, "available", lambda: "")
+    monkeypatch.setattr(npcap, "devices", lambda: [npcap.Device(
+        "NPF_wifi", "Wi-Fi", ("192.168.1.106",), True, True)])
+    opened = []
+    monkeypatch.setattr(netpath_tcp._NpcapListener, "__init__",
+                        lambda self, adapter: opened.append(adapter))
+    raw = []
+    real_socket = socket.socket
+    monkeypatch.setattr(netpath_tcp.socket, "socket",
+                        lambda *a: raw.append(a) or real_socket(*a))
+    assert isinstance(netpath_tcp.open_listener("8.8.8.8"), netpath_tcp._NpcapListener)
+    assert opened == ["NPF_wifi"] and raw == []

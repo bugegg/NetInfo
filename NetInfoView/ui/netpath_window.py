@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 
 from ..ping import hostname, netpath, whois
 from ..ping.netpath import DESTINATION, SOURCE, PathGraph, Sweep
-from ..ping.netpath_tcp import DEFAULT_PORT, TcpProber, TcpUnavailable
+from ..ping.netpath_tcp import DEFAULT_PORT, UNHEARD, TcpProber, TcpUnavailable
 from .tracepath_window import country_flag, country_label
 
 #: Seconds between traces while Live is on.
@@ -95,6 +95,11 @@ class NetPathThread(QThread):
                     if prober is not None:
                         prober.close()
                 if self._stop:
+                    break
+                if prober is not None and not any(result.routes):
+                    # Not one hop answered: the routers' ICMP errors aren't
+                    # reaching us (Windows Firewall), not a dead path.
+                    self.failed.emit(UNHEARD)
                     break
                 self.sweep_ready.emit(result)
                 self._look_up(result)

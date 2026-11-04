@@ -81,17 +81,16 @@ class _PcapPkthdr(ctypes.Structure):
 
 
 _dll: ctypes.CDLL | None = None
-_load_error = ""
 
 
 def _load() -> ctypes.CDLL:
     """wpcap.dll, typed once. Npcap puts it in System32\\Npcap unless it was
-    installed in WinPcap-compatible mode, which puts it in System32."""
-    global _dll, _load_error
+    installed in WinPcap-compatible mode, which puts it in System32.
+    A failure isn't remembered, so installing Npcap and pressing Refresh
+    works without restarting the app."""
+    global _dll
     if _dll is not None:
         return _dll
-    if _load_error:
-        raise NpcapError(_load_error)
     system32 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
     npcap_dir = os.path.join(system32, "Npcap")
     candidates = [os.path.join(npcap_dir, "wpcap.dll"), "wpcap.dll"]
@@ -105,7 +104,6 @@ def _load() -> ctypes.CDLL:
         except (OSError, AttributeError):
             continue
     else:
-        _load_error = NOT_INSTALLED
         raise NpcapError(NOT_INSTALLED)
 
     dll.pcap_findalldevs.argtypes = [ctypes.POINTER(ctypes.POINTER(_PcapIf)), ctypes.c_char_p]

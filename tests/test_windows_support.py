@@ -252,6 +252,33 @@ def test_npcap_connection_status():
     assert not npcap.is_connected(npcap.PCAP_IF_UP)
 
 
+def test_npcap_installed_after_launch_is_found_on_refresh(monkeypatch):
+    import ctypes
+
+    from NetInfoView.ping import npcap
+
+    monkeypatch.setattr(npcap, "_dll", None)
+    monkeypatch.setattr(npcap.os, "add_dll_directory", lambda path: None, raising=False)
+
+    def missing(path):
+        raise OSError("not found")
+
+    monkeypatch.setattr(ctypes, "CDLL", missing)
+    assert npcap.available() == npcap.NOT_INSTALLED
+
+    class FakeFunction:
+        pass
+
+    class FakeDll:
+        def __getattr__(self, name):
+            function = FakeFunction()
+            setattr(self, name, function)
+            return function
+
+    monkeypatch.setattr(ctypes, "CDLL", lambda path: FakeDll())
+    assert npcap.available() == ""
+
+
 def test_npcap_adapters_are_named_as_windows_names_them(monkeypatch):
     from NetInfoView.ping import network_interfaces as ni
     from NetInfoView.ping import npcap
