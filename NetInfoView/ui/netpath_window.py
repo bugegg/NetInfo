@@ -138,6 +138,18 @@ def layout(graph: PathGraph) -> dict[str, QPointF]:
     return positions
 
 
+def curve(start: QPointF, end: QPointF) -> QPainterPath:
+    """A link from `start` to `end` that leaves and arrives level."""
+    path = QPainterPath(start)
+    bend = (end.x() - start.x()) / 2
+    path.cubicTo(QPointF(start.x() + bend, start.y()), QPointF(end.x() - bend, end.y()), end)
+    return path
+
+
+#: How faint a hop is when the trace on screen didn't pass it.
+PAST_OPACITY = 0.4
+
+
 class NodeItem(QGraphicsObject):
     """A hop (a circle with its hop number), this computer or the host
     (rounded squares), with its name and address underneath."""
@@ -309,6 +321,11 @@ class NetPathWindow(QWidget):
         #: Each trace's own graph, side by side with sweeps: what's usual for
         #: a hop or link is taken from the other traces.
         self.graphs: list[PathGraph] = []
+        #: Every trace in the history as one graph: every route seen. It
+        #: sets where hops go, so they stay put from trace to trace.
+        self.everything: PathGraph | None = None
+        #: (parent, child) -> (the drawn link, whether the trace on screen took it).
+        self.edge_items: dict = {}
         self.shown = -1  # index into sweeps of the trace on screen
         self._follow = True  # show each new trace as it comes
         self.names: dict[str, str] = {}
@@ -360,7 +377,8 @@ class NetPathWindow(QWidget):
             zoom.addWidget(button)
         zoom.addStretch(1)
         self.legend = _label("Circle = hop, numbered by distance · width = share of probe flows · "
-                             "amber ≥25 ms or ≥5% lost · red ≥100 ms or ≥10% lost · dashed = no reply",
+                             "amber ≥25 ms or ≥5% lost · red ≥100 ms or ≥10% lost · dashed = no reply · "
+                             "thin gray = route taken in other traces",
                              "muted")
         zoom.addWidget(self.legend)
         graph_side = QWidget()
@@ -456,6 +474,7 @@ class NetPathWindow(QWidget):
             del self.sweeps[0]
             del self.graphs[0]
             self.shown -= 1
+        self.everything = netpath.build_graph(self.sweeps, self._ip)
         self.history.healths = [self.trace_level(g)[0] for g in self.graphs]
         status = self._summary(result)
         if self._thread is not None and self._thread.live:
@@ -484,7 +503,7 @@ class NetPathWindow(QWidget):
         self.history_text.setText(f"Showing {stamp}" + ("" if self._follow else " · click the "
                                                        "last block to follow live"))
         self._set_health(*self.trace_level(self.graphs[index]))
-        self.render(self.graphs[index])
+        self.render(self.graphs[index], self.everything)
 
     def trace_level(self, graph: PathGraph) -> tuple[str, list[str]]:
         """A whole trace's level, its worst hop or link, and why."""
@@ -502,20 +521,32 @@ class NetPathWindow(QWidget):
         self.health.setToolTip("\n".join(reasons or []) or "Every hop and link within thresholds")
         self.health.setStyleSheet(f"color: {color}; background: {LEVEL_FILLS[level]};")
 
-    def render(self, graph: PathGraph) -> None:
-        self.graph = graph
+    def render(self, graph: PathGraph, everything: PathGraph | None = None) -> None:
+        """Draw `graph`, the trace on screen, in thick lines over the routes
+        of every trace in `everything`, which are drawn thin and faint."""
+        everything = everything if everything is not None else graph
+        self.graph, self.everything = graph, everything
         selected = next((key for key, item in self.items.items() if item.isSelected()), None)
         scene = self.view.scene()
         scene.blockSignals(True)
         scene.clear()
         self.items = {}
-        positions = layout(graph)
+        self.edge_items = {}
+        positions = layout(everything)
         muted = QColor(self.colors["muted"])
+        # Routes taken in other traces: thin, under the ones taken now.
+        for pair, edge in everything.edges.items():
+            if pair in graph.edges:
+                continue
+            silent = everything.nodes[edge.parent].silent or everything.nodes[edge.child].silent
+            style = Qt.PenStyle.DashLine if edge.unknown or silent else Qt.PenStyle.SolidLine
+            item = scene.addPath(curve(positions[edge.parent], positions[edge.child]),
+                                 QPen(muted, 1.5, style))
+            item.setZValue(-1)
+            item.setOpacity(0.7)
+            self.edge_items[pair] = (item, False)
         for edge in graph.edges.values():
-            start, end = positions[edge.parent], positions[edge.child]
-            path = QPainterPath(start)
-            bend = (end.x() - start.x()) / 2
-            path.cubicTo(QPointF(start.x() + bend, start.y()), QPointF(end.x() - bend, end.y()), end)
+            path = curve(positions[edge.parent], positions[edge.child])
             share = len(edge.flows) / max(1, graph.flows)
             silent = graph.nodes[edge.parent].silent or graph.nodes[edge.child].silent
             level, _ = self.edge_condition(graph, edge)
@@ -527,12 +558,21 @@ class NetPathWindow(QWidget):
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             item = scene.addPath(path, pen)
             item.setZValue(0)
+            self.edge_items[(edge.parent, edge.child)] = (item, True)
             latency = graph.edge_latency(edge)
             if latency is not None:
                 self._add_pill(scene, path.pointAtPercent(0.5), format_latency(latency))
         reached = graph.nodes[DESTINATION].rtts
-        for key, node in graph.nodes.items():
-            if key == SOURCE:
+        for key in everything.nodes:
+            node = graph.nodes.get(key)
+            if node is None:  # a hop of another trace's route
+                past = everything.nodes[key]
+                name = self.names.get(past.address, "")
+                item = NodeItem(key, "router", self.colors["muted"], str(past.ttl),
+                                "No reply" if past.silent else name or past.address,
+                                past.address if name else "", self.colors, dashed=past.silent)
+                item.setOpacity(PAST_OPACITY)
+            elif key == SOURCE:
                 name, address = self._source
                 item = NodeItem(key, "source", BLUE, "PC", name, address, self.colors)
             elif key == DESTINATION:
@@ -627,8 +667,26 @@ class NetPathWindow(QWidget):
         key = next((k for k, item in self.items.items() if item.isSelected()), None)
         if key is None:
             self._details_for_path(graph)
+        elif key not in graph.nodes:
+            self._details_for_past(key)
         else:
             self._details_for_node(graph, key)
+
+    def _details_for_past(self, key: str) -> None:
+        """A hop the trace on screen didn't pass, from the other traces."""
+        node = self.everything.nodes[key]
+        seen = sum(1 for g in self.graphs if key in g.nodes)
+        latency = node.latency()
+        rows = [
+            ("Address", node.address or "—"),
+            ("Hop", str(node.ttl)),
+            ("Seen in", f"{seen} of {len(self.graphs)} traces"),
+            ("This trace", "Didn't pass here: a route taken at other times"),
+            ("Latency", format_range(latency) if latency else "—"),
+        ]
+        title = (f"Hop {node.ttl}: no reply" if node.silent
+                 else self.names.get(node.address) or node.address)
+        self._set_rows(title, rows, self.countries.get(node.address, ""))
 
     def _set_rows(self, title: str, rows: list[tuple[str, str]], flag: str = "") -> None:
         self.details_title.setText(title)
@@ -689,7 +747,7 @@ class NetPathWindow(QWidget):
             name, address = self._source
             self._set_rows(name, [("Address", address or "—"), ("Role", "Where the probes start")])
             return
-        everywhere = netpath.build_graph(self.sweeps, self._ip).nodes.get(key)
+        everywhere = self.everything.nodes.get(key) if self.everything else None
         latency = everywhere.latency() if everywhere else None
         if key == DESTINATION:
             rows = [("Address", self._ip),
@@ -740,7 +798,7 @@ class NetPathWindow(QWidget):
 
     def _refresh_labels(self) -> None:
         for item in self.items.values():
-            node = getattr(self, "graph", None) and self.graph.nodes.get(item.key)
+            node = self.everything.nodes.get(item.key) if self.everything else None
             if node is not None and item.kind == "router" and self.names.get(node.address):
                 item.title, item.subtitle = self.names[node.address], node.address
                 item.update()

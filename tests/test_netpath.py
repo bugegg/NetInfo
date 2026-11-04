@@ -221,3 +221,36 @@ def test_hops_and_links_are_colored_by_the_netpath_thresholds(qapp, monkeypatch)
     window.show_sweep(0)
     assert window.items["10.0.1.1"].ring.name() == nw.GREEN
     window.close()
+
+
+def test_routes_of_other_traces_are_drawn_thin_under_the_one_shown(qapp, monkeypatch):
+    from NetInfoView.ui import netpath_window as nw
+
+    monkeypatch.setattr(nw.NetPathWindow, "start", lambda self: None)
+    window = nw.NetPathWindow("dns.google", "8.8.8.8")
+    via_a = [Answer("10.0.0.1", 1), Answer("10.0.1.1", 5), Answer("8.8.8.8", 9, reached=True)]
+    via_b = [Answer("10.0.0.1", 1), Answer("10.0.2.1", 5), Answer("8.8.8.8", 9, reached=True)]
+    window.add_sweep(Sweep(0, 2, [via_a, via_a]))
+    window.add_sweep(Sweep(1, 2, [via_b, via_b]))  # shown: the latest
+
+    # Both routes are on screen; only route B is the trace's own.
+    assert {"10.0.1.1", "10.0.2.1"} <= set(window.items)
+    old = window.edge_items[("10.0.0.1", "10.0.1.1")]
+    now = window.edge_items[("10.0.0.1", "10.0.2.1")]
+    assert old[1] is False and now[1] is True
+    assert old[0].pen().widthF() < now[0].pen().widthF()
+    assert window.items["10.0.1.1"].opacity() < 1 and window.items["10.0.2.1"].opacity() == 1
+    # Hops keep their place from trace to trace.
+    place = window.items["10.0.1.1"].pos()
+    window.items["10.0.1.1"].setSelected(True)
+    rows = [window.details_grid.itemAtPosition(r, 1).widget().text()
+            for r in range(window.details_grid.rowCount())
+            if window.details_grid.itemAtPosition(r, 1) is not None]
+    assert "1 of 2 traces" in rows
+
+    # Back to the first trace: the roles swap.
+    window.show_sweep(0)
+    assert window.edge_items[("10.0.0.1", "10.0.1.1")][1] is True
+    assert window.edge_items[("10.0.0.1", "10.0.2.1")][1] is False
+    assert window.items["10.0.2.1"].opacity() < 1 and window.items["10.0.1.1"].pos() == place
+    window.close()
