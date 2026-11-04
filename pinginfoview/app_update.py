@@ -1,14 +1,17 @@
 """Self-update from GitHub Releases.
 
 Each release (built by .github/workflows/release.yml) carries a zip of the
-.app per CPU type, named ``NetInfo-<version>-<arch>.zip``. This module
-finds the newest release, downloads the zip for this Mac, and swaps it in for
-the running bundle. Kept free of Qt so it's testable without an event loop;
-ui/app_update_thread.py runs it off the GUI thread.
+macOS .app per CPU type, named ``NetInfo-<version>-<arch>.zip``, and a
+Windows installer, ``NetInfo-<version>-windows-x64-setup.exe``. This module
+finds the newest release and downloads the file for this computer. Kept free
+of Qt so it's testable without an event loop; ui/app_update_thread.py runs it
+off the GUI thread.
 
-The swap can't happen while the app is running, so install_and_relaunch()
-hands it to a small detached shell script that waits for this process to
-exit, replaces the bundle, and opens the new one.
+Neither OS lets the running app replace itself, so install_update() hands
+the swap to another process and the caller then quits: on macOS a small
+detached shell script that waits for this process to exit, replaces the
+bundle and opens the new one; on Windows the installer itself, run silently,
+which closes the app, installs over it and starts it again.
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import __version__
+from .osinfo import IS_WINDOWS
 
 #: ``owner/name`` of the public GitHub repository that publishes releases.
 GITHUB_REPO = "bugegg/NetInfo"
@@ -44,7 +48,7 @@ class Release:
     version: str
     notes: str
     page_url: str
-    #: Download URL of this Mac's zip, or "" if the release has none for it.
+    #: Download URL of this computer's zip/installer, or "" if there's none.
     asset_url: str
 
 
@@ -63,16 +67,24 @@ def is_newer(remote: str, local: str = __version__) -> bool:
     return parse_version(remote) > parse_version(local)
 
 
-def _asset_suffix(machine: str | None = None) -> str:
+#: The one Windows build: 64-bit Intel/AMD (it also runs on Windows on Arm).
+WINDOWS_ASSET_SUFFIX = "-windows-x64-setup.exe"
+
+
+def _asset_suffix(machine: str | None = None, windows: bool | None = None) -> str:
+    if IS_WINDOWS if windows is None else windows:
+        return WINDOWS_ASSET_SUFFIX
     return f"-{machine or platform.machine()}.zip"
 
 
-def parse_release(data: dict, machine: str | None = None) -> Release:
+def parse_release(
+    data: dict, machine: str | None = None, windows: bool | None = None
+) -> Release:
     """Pick out what the updater needs from the GitHub API's release JSON."""
     tag = data.get("tag_name") or ""
     if not tag:
         raise AppUpdateError("The latest release has no version tag.")
-    suffix = _asset_suffix(machine)
+    suffix = _asset_suffix(machine, windows)
     asset_url = next(
         (
             asset.get("browser_download_url", "")
@@ -119,8 +131,9 @@ def download(url: str, dest: Path) -> Path:
 
 
 def running_app_bundle() -> Path | None:
-    """The .app this process runs from, or None when run from source."""
-    if not getattr(sys, "frozen", False):
+    """The .app this process runs from, or None when run from source (or on
+    Windows)."""
+    if IS_WINDOWS or not getattr(sys, "frozen", False):
         return None
     # .../NetInfo.app/Contents/MacOS/NetInfo
     bundle = Path(sys.executable).resolve().parents[2]
@@ -142,13 +155,24 @@ def extract_app(zip_path: Path, dest_dir: Path) -> Path:
     return apps[0]
 
 
+def self_update_supported() -> bool:
+    """True when this is an installed build that install_update() can replace."""
+    if IS_WINDOWS:
+        return bool(getattr(sys, "frozen", False))
+    return running_app_bundle() is not None
+
+
 def download_and_extract(release: Release) -> Path:
-    """Fetch this Mac's zip from ``release`` into a temp dir; return the new .app."""
+    """Fetch this computer's download from ``release`` into a temp dir and
+    return what install_update() takes: the new .app, or the installer."""
     if not release.asset_url:
         raise AppUpdateError(
-            f"Version {release.version} has no download for this Mac ({platform.machine()})."
+            f"Version {release.version} has no download for this computer "
+            f"({platform.system()} {platform.machine()})."
         )
     work = Path(tempfile.mkdtemp(prefix="NetInfo-update-"))
+    if IS_WINDOWS:
+        return download(release.asset_url, work / release.asset_url.rsplit("/", 1)[-1])
     zip_path = download(release.asset_url, work / "update.zip")
     return extract_app(zip_path, work / "extracted")
 
@@ -191,3 +215,29 @@ def install_and_relaunch(new_app: Path, target_app: Path) -> None:
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+
+
+#: Inno Setup switches: no wizard pages, close the running app for us, and
+#: no reboot prompt. The installer's own [Run] entry restarts the app.
+WINDOWS_INSTALLER_ARGS = ["/SILENT", "/SUPPRESSMSGBOXES", "/CLOSEAPPLICATIONS", "/NORESTART"]
+
+
+def install_update(downloaded: Path) -> None:
+    """Hand the downloaded update to whatever installs it; the caller must
+    then quit the app."""
+    if IS_WINDOWS:
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+        )
+        try:
+            subprocess.Popen(
+                [str(downloaded), *WINDOWS_INSTALLER_ARGS],
+                creationflags=flags, close_fds=True,
+            )
+        except OSError as exc:
+            raise AppUpdateError(f"Could not start the installer: {exc}") from exc
+        return
+    bundle = running_app_bundle()
+    if bundle is None:
+        raise AppUpdateError("Only the packaged app can update itself.")
+    install_and_relaunch(downloaded, bundle)

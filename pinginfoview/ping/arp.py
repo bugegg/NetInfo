@@ -7,12 +7,19 @@ beyond the router — which is also true of the original.
 from __future__ import annotations
 
 import re
-import subprocess
 import time
+
+from ..osinfo import IS_WINDOWS, run_quietly
 
 #: ``? (192.168.1.1) at 1:2:3:4:5:6 on en0 ...``
 _ARP_LINE = re.compile(
     r"\((?P<ip>\d{1,3}(?:\.\d{1,3}){3})\)\s+at\s+(?P<mac>[0-9a-fA-F:]{11,17})"
+)
+#: Windows' ``arp -a`` row: ``  192.168.1.1     aa-bb-cc-dd-ee-ff     dynamic``.
+#: Only the row shape is matched; the headers around it are localised.
+_WINDOWS_ARP_LINE = re.compile(
+    r"^\s*(?P<ip>\d{1,3}(?:\.\d{1,3}){3})\s+(?P<mac>[0-9a-fA-F]{2}(?:-[0-9a-fA-F]{2}){5})\s",
+    re.MULTILINE,
 )
 _CACHE_TTL_SECONDS = 30.0
 
@@ -42,16 +49,21 @@ def is_locally_administered(mac: str) -> bool:
     return bool(int(hex_digits[:2], 16) & 0x02)
 
 
+def parse_windows_arp(output: str) -> dict[str, str]:
+    """IP -> MAC from Windows' ``arp -a``, minus broadcast/multicast entries."""
+    table = {}
+    for match in _WINDOWS_ARP_LINE.finditer(output):
+        mac = match.group("mac").replace("-", ":").upper()
+        if mac == "FF:FF:FF:FF:FF:FF" or mac.startswith("01:00:5E"):
+            continue
+        table.setdefault(match.group("ip"), mac)
+    return table
+
+
 def _load_table() -> dict[str, str]:
-    try:
-        output = subprocess.run(
-            ["/usr/sbin/arp", "-a", "-n"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return {}
+    if IS_WINDOWS:
+        return parse_windows_arp(run_quietly(["arp", "-a"], timeout=5))
+    output = run_quietly(["/usr/sbin/arp", "-a", "-n"], timeout=5)
     table = {}
     for match in _ARP_LINE.finditer(output):
         mac = match.group("mac")

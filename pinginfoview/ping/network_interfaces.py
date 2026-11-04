@@ -1,4 +1,5 @@
-"""Enumerates this Mac's active IPv4 network interfaces via `ifconfig`.
+"""Enumerates this computer's active IPv4 network interfaces (`ifconfig` on
+macOS, Qt's QNetworkInterface on Windows).
 
 Used to offer "scan my whole network" when the host list is empty and the
 user hits Start: picking an interface turns into a CIDR block that
@@ -12,6 +13,8 @@ import ipaddress
 import re
 import subprocess
 from dataclasses import dataclass
+
+from ..osinfo import IS_WINDOWS
 
 #: One interface's block: its name, then every indented line until the next
 #: top-level name or the end of the output.
@@ -43,6 +46,8 @@ class NetworkInterface:
 
 def list_interfaces() -> list[NetworkInterface]:
     """Every active, non-loopback IPv4 interface with a scannable subnet."""
+    if IS_WINDOWS:
+        return _list_interfaces_qt()
     try:
         output = subprocess.run(
             ["/sbin/ifconfig"], capture_output=True, text=True, timeout=5
@@ -83,6 +88,45 @@ def list_interfaces() -> list[NetworkInterface]:
                 cidr=f"{network.network_address}/{network.prefixlen}",
             )
         )
+    return interfaces
+
+
+def _scannable(name: str, ip_address: str, netmask: str) -> NetworkInterface | None:
+    try:
+        network = ipaddress.IPv4Network(f"{ip_address}/{netmask}", strict=False)
+    except ValueError:
+        return None
+    if network.prefixlen >= 31 or network.is_loopback or network.is_link_local:
+        return None  # nothing to scan (point-to-point, VPN, APIPA)
+    return NetworkInterface(
+        name=name,
+        ip_address=ip_address,
+        netmask=netmask,
+        cidr=f"{network.network_address}/{network.prefixlen}",
+    )
+
+
+def _list_interfaces_qt() -> list[NetworkInterface]:
+    """Windows: its tools print localised text, so ask Qt, which reads the
+    same IP Helper tables Windows' own settings do."""
+    from PyQt6.QtNetwork import QAbstractSocket, QNetworkInterface
+
+    flags = QNetworkInterface.InterfaceFlag
+    interfaces = []
+    for iface in QNetworkInterface.allInterfaces():
+        state = iface.flags()
+        if not (state & flags.IsUp and state & flags.IsRunning) or state & flags.IsLoopBack:
+            continue
+        for entry in iface.addressEntries():
+            if entry.ip().protocol() != QAbstractSocket.NetworkLayerProtocol.IPv4Protocol:
+                continue
+            found = _scannable(
+                iface.humanReadableName() or iface.name(),
+                entry.ip().toString(),
+                entry.netmask().toString(),
+            )
+            if found is not None:
+                interfaces.append(found)
     return interfaces
 
 

@@ -34,7 +34,7 @@ class UpdateDownloadThread(QThread):
 
     def run(self) -> None:  # noqa: D102 - QThread entry point
         try:
-            new_app: Path = download_and_extract(self._release)
+            new_app: Path = download_and_extract(self._release)  # .app or installer
         except AppUpdateError as exc:
             self.failed.emit(str(exc))
         except Exception as exc:

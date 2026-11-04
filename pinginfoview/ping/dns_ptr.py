@@ -19,6 +19,8 @@ import struct
 import subprocess
 import time
 
+from ..osinfo import IS_WINDOWS
+
 DNS_PORT = 53
 TYPE_PTR = 12
 CLASS_IN = 1
@@ -128,20 +130,73 @@ def parse_scutil_nameservers(output: str) -> list[str]:
     return servers
 
 
+def windows_nameservers() -> list[str]:
+    """The DNS servers Windows is using, from GetNetworkParams (iphlpapi)."""
+    import ctypes
+    from ctypes import wintypes
+
+    class IP_ADDR_STRING(ctypes.Structure):
+        pass
+
+    IP_ADDR_STRING._fields_ = [
+        ("Next", ctypes.POINTER(IP_ADDR_STRING)),
+        ("IpAddress", ctypes.c_char * 16),
+        ("IpMask", ctypes.c_char * 16),
+        ("Context", wintypes.DWORD),
+    ]
+
+    class FIXED_INFO(ctypes.Structure):
+        _fields_ = [
+            ("HostName", ctypes.c_char * 132),
+            ("DomainName", ctypes.c_char * 132),
+            ("CurrentDnsServer", ctypes.POINTER(IP_ADDR_STRING)),
+            ("DnsServerList", IP_ADDR_STRING),
+            ("NodeType", wintypes.UINT),
+            ("ScopeId", ctypes.c_char * 260),
+            ("EnableRouting", wintypes.UINT),
+            ("EnableProxy", wintypes.UINT),
+            ("EnableDns", wintypes.UINT),
+        ]
+
+    try:
+        get_params = ctypes.WinDLL("iphlpapi.dll").GetNetworkParams
+    except (AttributeError, OSError):
+        return []
+    size = wintypes.ULONG(0)
+    get_params(None, ctypes.byref(size))
+    buffer = ctypes.create_string_buffer(max(size.value, ctypes.sizeof(FIXED_INFO)))
+    if get_params(buffer, ctypes.byref(size)) != 0:
+        return []
+    info = FIXED_INFO.from_buffer(buffer)
+    servers: list[str] = []
+    node = info.DnsServerList
+    while True:
+        address = node.IpAddress.decode("ascii", "replace").strip("\0 ")
+        if address and address != "0.0.0.0" and address not in servers:
+            servers.append(address)
+        if not node.Next:
+            break
+        node = node.Next.contents
+    return servers
+
+
 def system_nameservers() -> list[str]:
     """The DNS servers macOS is using right now (briefly cached)."""
     global _servers_cache
     fetched_at, servers = _servers_cache
     if servers and time.monotonic() - fetched_at < SERVERS_TTL_SECONDS:
         return servers
-    try:
-        output = subprocess.run(
-            ["/usr/sbin/scutil", "--dns"], capture_output=True, text=True, timeout=3
-        ).stdout
-        servers = parse_scutil_nameservers(output)
-    except (OSError, subprocess.SubprocessError):
-        servers = []
-    if not servers:  # not macOS, or scutil failed
+    if IS_WINDOWS:
+        servers = windows_nameservers()
+    else:
+        try:
+            output = subprocess.run(
+                ["/usr/sbin/scutil", "--dns"], capture_output=True, text=True, timeout=3
+            ).stdout
+            servers = parse_scutil_nameservers(output)
+        except (OSError, subprocess.SubprocessError):
+            servers = []
+    if not servers and not IS_WINDOWS:  # scutil failed
         try:
             with open("/etc/resolv.conf", encoding="utf-8") as handle:
                 servers = parse_scutil_nameservers(

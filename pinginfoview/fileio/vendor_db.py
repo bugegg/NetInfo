@@ -8,12 +8,14 @@ SQLite under Application Support is that this fetch only has to happen once.
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 import threading
 from collections.abc import Iterable
 from pathlib import Path
 
+from ..osinfo import IS_WINDOWS
 from ..settings import APPLICATION
 
 _HEX_PREFIX = re.compile(r"[0-9A-Fa-f]{6,}")
@@ -38,7 +40,11 @@ PRIVATE_MAC_LABEL = "(Private/Randomized MAC)"
 
 
 def default_db_path() -> Path:
-    """``~/Library/Application Support/PingInfoView/vendor.sqlite`` on macOS."""
+    """``~/Library/Application Support/PingInfoView/vendor.sqlite`` on macOS,
+    ``%APPDATA%\\PingInfoView\\vendor.sqlite`` on Windows."""
+    if IS_WINDOWS:
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+        return base / APPLICATION / "vendor.sqlite"
     return Path.home() / "Library" / "Application Support" / APPLICATION / "vendor.sqlite"
 
 

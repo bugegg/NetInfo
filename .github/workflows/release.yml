@@ -1,28 +1,32 @@
-# Push a tag like v1.2 to build the app on GitHub's Apple Silicon runner and
-# publish NetInfo-1.2-arm64.zip as a GitHub Release. Installed copies of
-# the app find that release and offer to update themselves.
+# Builds NetInfo for macOS (Apple Silicon) and Windows (x64) on every push,
+# so a broken build shows up before release. Pushing a tag like v1.4 also
+# publishes both as a GitHub Release, which installed copies of the app find
+# and offer to update to:
 #
-#   git tag v1.2 && git push origin v1.2
-name: Release
+#   git tag v1.4 && git push origin v1.4
+name: Build and release
 
 on:
   push:
+    branches: ["**"]
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  macos:
     runs-on: macos-15  # arm64 (Apple Silicon)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
 
       - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           sed -i '' "s/^__version__ = .*/__version__ = \"$VERSION\"/" pinginfoview/__init__.py
@@ -50,9 +54,76 @@ jobs:
       - name: Build
         run: ./build_app.sh
 
+      - uses: actions/upload-artifact@v5
+        with:
+          name: macos
+          path: dist/NetInfo-*.zip
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          (Get-Content pinginfoview\__init__.py) -replace '^__version__ = .*', "__version__ = `"$version`"" |
+            Set-Content pinginfoview\__init__.py
+          Select-String -Path pinginfoview\__init__.py -Pattern '^__version__'
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv\Scripts\pip install -r requirements-lock.txt pillow pytest
+
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        # Same network-dependent test as on macOS; tests of macOS-only code
+        # are skipped by tests/conftest.py.
+        run: >
+          .venv\Scripts\python -m pytest -q
+          --deselect tests/test_port_scan.py::test_scan_many_handles_multiple_hosts_independently
+
+      - name: Install Inno Setup
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Build
+        run: .\build_windows.ps1
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: windows
+          path: dist/NetInfo-*-windows-x64-setup.exe
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/NetInfo-*.zip \
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
             --title "NetInfo ${GITHUB_REF_NAME#v}" --generate-notes

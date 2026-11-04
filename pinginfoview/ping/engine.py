@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
+from ..osinfo import IS_WINDOWS
 from .icmp import IcmpPinger
 from .result import PingResult, PingStatus
 from .tcp import tcp_ping
@@ -81,7 +82,12 @@ class PingEngine:
         self._on_round_complete = on_round_complete
         self._options = EngineOptions()
         self._targets: list[PingTarget] = []
-        self._pinger = IcmpPinger()
+        if IS_WINDOWS:
+            from .icmp_windows import IcmpWindowsPinger
+
+            self._pinger = IcmpWindowsPinger()
+        else:
+            self._pinger = IcmpPinger()
         self._semaphore = asyncio.Semaphore(self._options.max_concurrent)
         self._pending_batch: ResultBatch = []
         self._in_flight: set[int] = set()

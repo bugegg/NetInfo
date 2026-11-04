@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable
 from functools import partial
 
+from ..osinfo import IS_WINDOWS
 from . import http_title, mdns, netbios, network_interfaces, ntlm, snmp, ssdp, tls_cert
 from .parallel import first_answer
 
@@ -98,6 +99,8 @@ def _usable(name: str) -> bool:
 
 
 def _resolve_dscacheutil(ip: str) -> str:
+    if IS_WINDOWS:
+        return ""  # macOS's resolver cache; Windows' is reached via gethostbyaddr
     try:
         output = subprocess.run(
             ["/usr/bin/dscacheutil", "-q", "host", "-a", "address", ip],

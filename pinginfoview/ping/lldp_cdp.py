@@ -13,7 +13,11 @@ Wireshark's ChmodBPF sets up; otherwise opening it fails with a clear error.
 from __future__ import annotations
 
 import ctypes
-import fcntl
+
+try:
+    import fcntl
+except ImportError:  # Windows: no /dev/bpf, and the UI hides this feature
+    fcntl = None
 import ipaddress
 import os
 import select
