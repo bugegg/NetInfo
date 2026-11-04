@@ -4,9 +4,10 @@ TracepathThread as each hop is probed (ping/tracepath.py)."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from PyQt6.QtCore import QCoreApplication, QLocale, Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QAction, QBrush, QColor
+from PyQt6.QtGui import QAction, QBrush, QColor, QIcon
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
@@ -32,15 +33,26 @@ NAME_WORKERS = 8
 DROP_TINT = QColor(255, 196, 0, 70)
 
 
+#: Bundled flag images, one ``XX.png`` per ISO country code (flag-icons,
+#: MIT). Images rather than flag emoji: Windows' emoji font has no flags
+#: and shows the bare letters ("TH") instead.
+FLAG_DIR = Path(__file__).resolve().parent.parent / "flags"
+
+
 def country_label(code: str) -> str:
-    """"TH" as its flag and name, "🇹🇭 Thailand"; just the code if Qt
-    doesn't know it."""
+    """"TH" as its name, "Thailand"; just the code if Qt doesn't know it."""
     code = code.upper()
-    flag = "".join(chr(0x1F1E6 + ord(letter) - ord("A")) for letter in code)
     territory = QLocale.codeToTerritory(code)
     if territory == QLocale.Country.AnyCountry:
-        return f"{flag} {code}"
-    return f"{flag} {QLocale.territoryToString(territory)}"
+        return code
+    return QLocale.territoryToString(territory)
+
+
+def country_flag(code: str) -> QIcon:
+    """The country's flag, or an empty icon for a code without one (a
+    registry's "AP", Asia-Pacific)."""
+    path = FLAG_DIR / f"{code.upper()}.png"
+    return QIcon(str(path)) if len(code) == 2 and path.is_file() else QIcon()
 
 
 class TracepathThread(QThread):
@@ -193,6 +205,7 @@ class TracepathWindow(QWidget):
         item = self._items.get(ttl)
         if item is not None:
             item.setText(COUNTRY_COLUMN, country_label(code))
+            item.setIcon(COUNTRY_COLUMN, country_flag(code))
             item.setToolTip(COUNTRY_COLUMN, "Where the address is registered, "
                                             "not necessarily where the device is")
 

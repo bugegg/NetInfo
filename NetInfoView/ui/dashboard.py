@@ -11,13 +11,13 @@ import socket
 import time
 from datetime import datetime
 
-from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer
+from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, QSysInfo, Qt, QTimer
 from PyQt6.QtGui import (
     QAction, QColor, QFont, QFontInfo, QPainter, QPainterPath, QPen,
 )
 from PyQt6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QPushButton,
-    QScrollArea, QSplitter, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget,
+    QScrollArea, QSizePolicy, QSplitter, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget,
     QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -42,6 +42,7 @@ GRID_COLUMNS = {
     "mac_address": ("MAC address", 158),
     "vendor": ("Vendor", 180),
     "mtu": ("MTU", 56),
+    "total_sent": ("Total", 64),
     "succeed_count": ("Succeed", 76),
     "failed_count": ("Failed", 64),
     "last_rtt": ("Latency", 76),
@@ -145,6 +146,29 @@ def draw_badge(painter: QPainter, rect: QRectF, text: str, bg: str, fg: str) -> 
     painter.setPen(QColor(fg))
     painter.drawText(pill.adjusted(18, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, text)
     painter.restore()
+
+
+def computer_name() -> str:
+    """This computer's name as people know it: "OFFICE-PC", not
+    "office-pc.corp.example" or "MacBook-Pro.local"."""
+    return QSysInfo.machineHostName().split(".")[0]
+
+
+class ElidedLabel(QLabel):
+    """A one-line label that ends in "…" when it doesn't fit, with the
+    full text as its tooltip (a long Mac name in the narrow sidebar)."""
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__(text)
+        self.setToolTip(text)
+        self.setMinimumWidth(1)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        text = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, self.width())
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.drawText(self.rect(), int(self.alignment()), text)
 
 
 class StatusDelegate(QStyledItemDelegate):
@@ -468,11 +492,13 @@ class Dashboard(QWidget):
         footer.setHorizontalSpacing(10)
         footer.setVerticalSpacing(2)
         self.connection_dot = label("●", "dotOnline")
-        self.connection_state = label("Connected", "strong")
+        self.connection_state = label("Live", "strong")
+        self.computer_name = ElidedLabel(computer_name())
         self.connection_ip = label("", "muted")
         footer.addWidget(self.connection_dot, 0, 0)
         footer.addWidget(self.connection_state, 0, 1)
-        footer.addWidget(self.connection_ip, 1, 1)
+        footer.addWidget(self.computer_name, 1, 1)
+        footer.addWidget(self.connection_ip, 2, 1)
         footer.setColumnStretch(1, 1)
         nav.addLayout(footer)
         return sidebar
@@ -783,7 +809,7 @@ class Dashboard(QWidget):
 
         subtitle, ip = self._network_text()
         self.subtitle.setText(subtitle)
-        self.connection_state.setText("Connected" if ip else "Not connected")
+        self.connection_state.setText("Live" if ip else "Not connected")
         self.connection_ip.setText(ip)
         self.connection_dot.setObjectName("dotOnline" if ip else "dotOffline")
         self.connection_dot.style().polish(self.connection_dot)

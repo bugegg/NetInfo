@@ -23,6 +23,7 @@ rm -rf build dist
     --exclude-module tkinter \
     --exclude-module pytest \
     --add-data NetInfoView/fonts:NetInfoView/fonts \
+    --add-data NetInfoView/flags:NetInfoView/flags \
     packaging/launch.py
 
 PLIST=dist/NetInfoView.app/Contents/Info.plist

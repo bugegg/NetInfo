@@ -23,6 +23,7 @@ Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
     --exclude-module tkinter `
     --exclude-module pytest `
     --add-data "NetInfoView\fonts;NetInfoView\fonts" `
+    --add-data "NetInfoView\flags;NetInfoView\flags" `
     packaging\launch.py
 if ($LASTEXITCODE) { throw "PyInstaller failed" }
 Remove-Item -Force NetInfoView.spec -ErrorAction SilentlyContinue
