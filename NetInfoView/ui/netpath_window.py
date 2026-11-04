@@ -359,7 +359,7 @@ class NetPathWindow(QWidget):
             zoom.addWidget(button)
         zoom.addStretch(1)
         self.legend = _label("Circle = hop, numbered by distance · width = share of probe flows · "
-                             "amber/red = slower than usual or flows lost · dashed = no reply",
+                             "amber ≥25 ms or ≥5% lost · red ≥100 ms or ≥10% lost · dashed = no reply",
                              "muted")
         zoom.addWidget(self.legend)
         graph_side = QWidget()
@@ -562,18 +562,9 @@ class NetPathWindow(QWidget):
                   if key in g.nodes and g.nodes[key].latency() is not None]
         return netpath.usual(values)
 
-    def usual_edge_ms(self, parent: str, child: str) -> float | None:
-        values = []
-        for g in self._others():
-            edge = g.edges.get((parent, child))
-            latency = g.edge_latency(edge) if edge is not None else None
-            if latency is not None:
-                values.append(latency)
-        return netpath.usual(values)
-
     def node_condition(self, graph: PathGraph, key: str) -> tuple[str, list[str]]:
-        """(level, reasons) for a hop: the link into it slower than usual,
-        flows lost after it, or a router saying the host can't be reached.
+        """(level, reasons) for a hop: the link into it slow, flows lost
+        after it, or a router saying the host can't be reached.
         Latency is judged on the link, not the hop's round trip, so a slow
         link marks only the hop after it, not every hop beyond."""
         node = graph.nodes[key]
@@ -584,8 +575,8 @@ class NetPathWindow(QWidget):
             if edge.child == key and not edge.unknown]
         if key == DESTINATION:
             share = 1 - graph.reached / graph.flows if graph.flows else 0.0
-            if share:
-                level = (netpath.CRIT if share >= netpath.CRIT_LOSS else netpath.WARN)
+            level = netpath.share_level(share)
+            if level != netpath.OK:
                 found.append((level, f"{graph.flows - graph.reached} of {graph.flows} "
                                      "flows didn't reach it"))
         else:
@@ -596,12 +587,11 @@ class NetPathWindow(QWidget):
         return netpath.worst(*(level for level, _ in found)), reasons
 
     def edge_condition(self, graph: PathGraph, edge) -> tuple[str, str]:
-        """(level, reason) for a link: its latency above its usual; for the
-        guessed link to a host that wasn't reached, the loss where it broke."""
+        """(level, reason) for a link: its latency; for the guessed link to
+        a host that wasn't reached, the loss where it broke."""
         if edge.unknown:
             return netpath.loss_level(graph.nodes[edge.parent])
-        return netpath.latency_level(graph.edge_latency(edge),
-                                     self.usual_edge_ms(edge.parent, edge.child), "Link latency")
+        return netpath.latency_level(graph.edge_latency(edge), "Link latency")
 
     def _add_pill(self, scene: QGraphicsScene, at: QPointF, text: str) -> None:
         label = scene.addSimpleText(text)

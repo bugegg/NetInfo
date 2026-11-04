@@ -107,19 +107,24 @@ def test_lost_flows_are_pinned_on_the_hop_where_they_stop():
     graph = netpath.build_graph([s], "8.8.8.8")
     assert graph.nodes["10.0.0.1"].loss() == 0
     assert graph.nodes["10.0.1.1"].dropped == {3}
+    # 1 of 3 is past SolarWinds' 10% critical.
     assert netpath.loss_level(graph.nodes["10.0.1.1"]) == (
-        netpath.WARN, "1 of 3 flows lost after this hop")
+        netpath.CRIT, "1 of 3 flows lost after this hop")
 
 
-def test_latency_levels_and_usual():
+def test_solarwinds_netpath_default_thresholds():
+    # Latency 25 ms warning, 100 ms critical; packet loss 5% / 10%.
+    assert netpath.latency_level(None) == (netpath.OK, "")
+    assert netpath.latency_level(24.9) == (netpath.OK, "")
+    assert netpath.latency_level(25) == (netpath.WARN, "Latency 25 ms (warning from 25 ms)")
+    assert netpath.latency_level(99)[0] == netpath.WARN
+    assert netpath.latency_level(100, "Link latency") == (
+        netpath.CRIT, "Link latency 100 ms (critical from 100 ms)")
+    assert [netpath.share_level(x) for x in (0, 0.049, 0.05, 0.099, 0.10, 1)] == [
+        "ok", "ok", "warn", "warn", "crit", "crit"]
+    assert netpath.worst(netpath.OK, netpath.CRIT, netpath.WARN) == netpath.CRIT
     assert netpath.usual([]) is None
     assert netpath.usual([3, 1, 2]) == 2 and netpath.usual([1, 2, 3, 10]) == 2.5
-    assert netpath.latency_level(None, 5) == (netpath.OK, "")
-    assert netpath.latency_level(40, 5) == (netpath.OK, "")
-    assert netpath.latency_level(60, 5)[0] == netpath.WARN
-    level, reason = netpath.latency_level(170, 5)
-    assert level == netpath.CRIT and reason == "Latency 170 ms, +165 ms over its usual 5 ms"
-    assert netpath.worst(netpath.OK, netpath.CRIT, netpath.WARN) == netpath.CRIT
 
 
 from test_main_window import _entries_with_statuses, qapp, window  # noqa: E402,F401
@@ -179,25 +184,27 @@ def _route(hop2_ms, reach=True):
     return hops + ([Answer("8.8.8.8", hop2_ms + 2, reached=True)] if reach else [])
 
 
-def test_hops_and_links_are_colored_against_their_usual(qapp, monkeypatch):
+def test_hops_and_links_are_colored_by_the_netpath_thresholds(qapp, monkeypatch):
     from NetInfoView.ui import netpath_window as nw
 
     monkeypatch.setattr(nw.NetPathWindow, "start", lambda self: None)
     window = nw.NetPathWindow("dns.google", "8.8.8.8")
-    for _ in range(3):  # three normal traces: hop 2 answers in 5 ms
-        window.add_sweep(Sweep(0, 2, [_route(5), _route(5)]))
-    window.add_sweep(Sweep(1, 2, [_route(125), _route(125)]))  # hop 2 now +120 ms
+    window.add_sweep(Sweep(0, 2, [_route(5), _route(5)]))  # hop 2 answers in 5 ms
+    assert window.node_condition(window.graph, "10.0.1.1") == ("ok", [])
+    window.add_sweep(Sweep(1, 2, [_route(41), _route(41)]))  # its link now takes 40 ms
     graph = window.graph
     level, reasons = window.node_condition(graph, "10.0.1.1")
-    # Judged on the link into the hop (125 - 1 ms), not its round trip.
-    assert level == "warn" and reasons == ["Link latency 124 ms, +120 ms over its usual 4 ms"]
-    # The host beyond answers later too, but its own link is as usual.
+    # Judged on the link into the hop (41 - 1 ms), not its round trip.
+    assert level == "warn" and reasons == ["Link latency 40 ms (warning from 25 ms)"]
+    # The host beyond answers later too, but its own link is quick.
     assert window.node_condition(graph, DESTINATION) == ("ok", [])
     assert window.edge_condition(graph, graph.edges[("10.0.0.1", "10.0.1.1")])[0] == "warn"
     assert window.node_condition(graph, "10.0.0.1") == ("ok", [])
     assert window.items["10.0.1.1"].ring.name() == nw.AMBER
-    assert "Hop 2 (10.0.1.1): Link latency 124 ms" in window.details_grid.itemAtPosition(
+    assert "Hop 2 (10.0.1.1): Link latency 40 ms" in window.details_grid.itemAtPosition(
         window.details_grid.rowCount() - 1, 1).widget().text()
+    window.add_sweep(Sweep(1, 2, [_route(121), _route(121)]))  # 120 ms: critical
+    assert window.items["10.0.1.1"].ring.name() == nw.RED
 
     # The host stops answering: only the hop where the routes stop turns red.
     window.add_sweep(Sweep(2, 2, [_route(5, reach=False), _route(5, reach=False)]))

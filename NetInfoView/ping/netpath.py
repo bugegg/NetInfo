@@ -362,12 +362,14 @@ def health(s: Sweep) -> str:
 # -- how healthy a hop or link looks -----------------------------------------
 
 OK, WARN, CRIT = "ok", "warn", "crit"
-#: Latency above a hop's or link's usual that turns it amber, then red.
-WARN_MS = 50.0
-CRIT_MS = 150.0
-#: Share of the flows through a hop lost after it that turns it amber, then red.
-WARN_LOSS = 0.25
-CRIT_LOSS = 0.5
+#: SolarWinds NetPath's default thresholds ("Edit NetPath thresholds for
+#: probes" in its documentation): latency 25 ms warning, 100 ms critical;
+#: packet loss 5% warning, 10% critical. Latency is a link's, the time the
+#: hop after it adds; loss is the share of flows lost at a hop.
+WARN_MS = 25.0
+CRIT_MS = 100.0
+WARN_LOSS = 0.05
+CRIT_LOSS = 0.10
 _ORDER = {OK: 0, WARN: 1, CRIT: 2}
 
 
@@ -384,22 +386,23 @@ def usual(values: list[float]) -> float | None:
     return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
 
 
-def latency_level(now: float | None, normal: float | None,
-                  what: str = "Latency") -> tuple[str, str]:
-    """How far `now` is above `normal`, as a level and a reason ("" if fine)."""
-    if now is None or normal is None:
+def latency_level(ms: float | None, what: str = "Latency") -> tuple[str, str]:
+    """`ms` against WARN_MS and CRIT_MS, as a level and a reason ("" if fine)."""
+    if ms is None or ms < WARN_MS:
         return OK, ""
-    excess = now - normal
-    level = CRIT if excess >= CRIT_MS else WARN if excess >= WARN_MS else OK
-    if level == OK:
-        return OK, ""
-    return level, f"{what} {now:.0f} ms, +{excess:.0f} ms over its usual {normal:.0f} ms"
+    if ms >= CRIT_MS:
+        return CRIT, f"{what} {ms:.0f} ms (critical from {CRIT_MS:.0f} ms)"
+    return WARN, f"{what} {ms:.0f} ms (warning from {WARN_MS:.0f} ms)"
+
+
+def share_level(share: float) -> str:
+    """A share of lost flows against WARN_LOSS and CRIT_LOSS."""
+    return CRIT if share >= CRIT_LOSS else WARN if share >= WARN_LOSS else OK
 
 
 def loss_level(node: Node) -> tuple[str, str]:
     """How many of the flows through `node` were lost after it."""
-    share = node.loss()
-    level = CRIT if share >= CRIT_LOSS else WARN if share >= WARN_LOSS else OK
+    level = share_level(node.loss())
     if level == OK:
         return OK, ""
     return level, f"{len(node.dropped)} of {len(node.flows)} flows lost after this hop"
