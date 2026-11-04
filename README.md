@@ -1,12 +1,12 @@
-# NetInfo for macOS
+# NetInfo
 
-A desktop ping monitor for macOS. It pings many hosts at a fixed interval over
+A desktop ping monitor for macOS and Windows. It pings many hosts at a fixed interval over
 ICMP or TCP, shows per-host statistics in a sortable grid, and discovers device
 details (MAC address, hostname, vendor, open ports) for hosts that answer.
 See [spec.md](spec.md) for the full specification. NetInfo was
 previously called PingInfoView.
 
-## Requirements
+## Requirements (macOS)
 
 - macOS 13 (Ventura) or newer
 - A Mac with Apple Silicon (M1 or later). The prebuilt app is `arm64` only;
@@ -17,7 +17,21 @@ previously called PingInfoView.
   `access_bpf` group. Installing [Wireshark](https://www.wireshark.org)
   with its *ChmodBPF* option sets that up.
 
-## Installing
+## Installing on Windows
+
+1. Download the latest `NetInfo-<version>-windows-x64-setup.exe` from the
+   [Releases](../../releases) page and run it. It installs for the current
+   user only, so it needs no administrator rights.
+2. The installer isn't code-signed, so Windows SmartScreen may say
+   *"Windows protected your PC"*. Click **More info → Run anyway**.
+3. Start NetInfo from the Start menu.
+
+Windows 10 or 11, 64-bit. Not available on Windows yet: Check MTU, Trace
+Path MTU and Check LLDP/CDP. Settings are kept in the registry under
+`HKEY_CURRENT_USER\Software\pinginfoview`; uninstall from
+**Settings → Apps**.
+
+## Installing on macOS
 
 1. Download the latest `NetInfo-<version>-arm64.zip` from the
    [Releases](../../releases) page.
@@ -61,12 +75,14 @@ check by hand, right-click the host list and choose **Check for Updates...**.
 
 To update manually instead, quit the app and replace
 `/Applications/NetInfo.app` with the new copy from the
-[Releases](../../releases) page.
+[Releases](../../releases) page; on Windows, run the newer installer.
 
 ## Releasing a new version
 
 Push a version tag. GitHub Actions runs the tests, builds the app on an Apple
-Silicon runner, and publishes `NetInfo-<version>-arm64.zip` as a release,
+Silicon runner and a Windows runner, and publishes
+`NetInfo-<version>-arm64.zip` and `NetInfo-<version>-windows-x64-setup.exe`
+as a release,
 which installed copies then offer to update to.
 
 ```bash
@@ -108,3 +124,15 @@ Run the tests with:
 .venv/bin/pip install pytest
 .venv/bin/python -m pytest
 ```
+
+### Windows
+
+Needs Python 3.14 and [Inno Setup 6](https://jrsoftware.org/isinfo.php):
+
+```powershell
+py -3.14 -m venv .venv
+.venv\Scripts\pip install -r requirements-lock.txt pillow
+.\build_windows.ps1
+```
+
+This produces `dist\NetInfo-<version>-windows-x64-setup.exe`.

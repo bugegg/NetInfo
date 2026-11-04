@@ -54,7 +54,7 @@ jobs:
       - name: Build
         run: ./build_app.sh
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: macos
           path: dist/NetInfo-*.zip
@@ -103,7 +103,7 @@ jobs:
       - name: Build
         run: .\build_windows.ps1
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: dist/NetInfo-*-windows-x64-setup.exe
@@ -114,7 +114,7 @@ jobs:
     needs: [macos, windows]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

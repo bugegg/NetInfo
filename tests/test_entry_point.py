@@ -1,6 +1,8 @@
 """Tests for the `python -m pinginfoview` entry point's startup helpers."""
 
-import resource
+import pytest
+
+resource = pytest.importorskip("resource")  # POSIX only; Windows has no fd limit to raise
 
 from pinginfoview.__main__ import FILE_DESCRIPTOR_LIMIT, _raise_file_descriptor_limit
 
