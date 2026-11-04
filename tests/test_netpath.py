@@ -137,7 +137,7 @@ def test_window_shows_the_graph_history_and_details(qapp, monkeypatch):
 
     # No real lookups: hop 10.0.2.1 has a name, the rest have none.
     monkeypatch.setattr(hostname, "resolve", lambda ip: "core.example" if ip == "10.0.2.1" else "")
-    for name in ("netname", "reserved_name", "country"):
+    for name in ("netname", "reserved_name", "country", "as_org"):
         monkeypatch.setattr(whois, name, lambda ip: "")
     window = netpath_window.NetPathWindow("dns.google", "8.8.8.8", probe=fake_probe([]),
                                           source=("OFFICE-PC", "192.168.1.2"), live=False)
@@ -233,6 +233,9 @@ def test_routes_of_other_traces_are_drawn_thin_under_the_one_shown(qapp, monkeyp
     window.add_sweep(Sweep(0, 2, [via_a, via_a]))
     window.add_sweep(Sweep(1, 2, [via_b, via_b]))  # shown: the latest
 
+    # By default only the trace on screen is drawn, as in SolarWinds.
+    assert "10.0.1.1" not in window.items and "10.0.2.1" in window.items
+    window.past_box.setChecked(True)
     # Both routes are on screen; only route B is the trace's own.
     assert {"10.0.1.1", "10.0.2.1"} <= set(window.items)
     old = window.edge_items[("10.0.0.1", "10.0.1.1")]
@@ -253,4 +256,101 @@ def test_routes_of_other_traces_are_drawn_thin_under_the_one_shown(qapp, monkeyp
     assert window.edge_items[("10.0.0.1", "10.0.1.1")][1] is True
     assert window.edge_items[("10.0.0.1", "10.0.2.1")][1] is False
     assert window.items["10.0.2.1"].opacity() < 1 and window.items["10.0.1.1"].pos() == place
+    window.close()
+
+
+# A path that ends in a provider's mesh: hop 1 is ours, hops 2-3 are four
+# GOOGLE routers (and one that didn't answer), then the host.
+def _into_google():
+    a = [Answer("10.0.0.1", 1), Answer("142.0.0.1", 5), Answer("142.0.1.1", 6),
+         Answer("8.8.8.8", 9, reached=True)]
+    b = [Answer("10.0.0.1", 1), Answer("142.0.0.2", 5), Answer("142.0.1.2", 6),
+         Answer("8.8.8.8", 9, reached=True)]
+    c = [Answer("10.0.0.1", 1), Answer("142.0.0.2", 5), None, Answer("8.8.8.8", 9, reached=True)]
+    return Sweep(0, 3, [a, b, c])
+
+
+GOOGLE = {f"142.0.{x}.{y}": "GOOGLE" for x in (0, 1) for y in (1, 2)}
+
+
+def test_providers_are_named_by_their_as():
+    from NetInfoView.ping import whois
+
+    assert whois.org_from_as_name("GOOGLE - Google LLC, US") == "Google LLC"
+    assert whois.org_from_as_name(
+        "TTBP-AS-AP - Triple T Broadband Public Company Limited, TH") == (
+        "Triple T Broadband Public Company Limited")
+    assert whois.org_from_as_name("EXAMPLE-AS") == "EXAMPLE-AS"
+    assert whois.org_from_as_name("") == ""
+    assert whois.as_org("10.0.0.1") == ""  # private: nothing to ask
+
+
+def test_a_providers_hops_become_one_box():
+    graph = netpath.build_graph([_into_google()], "8.8.8.8")
+    group_of = netpath.provider_groups(graph, GOOGLE)
+    boxed = {key for key, group in group_of.items() if group == "group:GOOGLE:2"}
+    silent = [key for key, node in graph.nodes.items() if node.silent]
+    assert boxed == set(GOOGLE) | set(silent)  # the silent hop inside joins it
+    assert "10.0.0.1" not in group_of  # private: never boxed
+    # Too few routers of one provider stay as they are.
+    assert netpath.provider_groups(graph, {"142.0.0.1": "TINY", "142.0.0.2": "TINY"}) == {}
+
+    folded = netpath.collapse(graph, group_of)
+    box = folded.nodes["group:GOOGLE:2"]
+    assert box.label == "GOOGLE" and box.ttl == 2 and len(box.flows) == 3
+    assert sorted(box.rtts) == [5, 5, 5]  # the hops where routes enter it
+    assert set(folded.edges) == {(SOURCE, "10.0.0.1"), ("10.0.0.1", "group:GOOGLE:2"),
+                                 ("group:GOOGLE:2", DESTINATION)}
+    assert not folded.nodes["group:GOOGLE:2"].silent
+
+
+def test_a_provider_far_apart_is_two_boxes():
+    route = [Answer(f"142.0.0.{ttl}", ttl) for ttl in range(1, 4)]
+    route += [Answer(f"10.9.0.{ttl}", ttl) for ttl in range(4, 8)]
+    route += [Answer(f"142.0.0.{ttl}", ttl) for ttl in range(8, 11)]
+    graph = netpath.build_graph([Sweep(0, 1, [route])], "8.8.8.8")
+    orgs = {f"142.0.0.{ttl}": "SAMENET" for ttl in (1, 2, 3, 8, 9, 10)}
+    assert set(netpath.provider_groups(graph, orgs).values()) == {
+        "group:SAMENET:1", "group:SAMENET:8"}
+
+
+def test_rarely_taken_links_are_left_out_but_no_hop_is_cut_off():
+    # Over 20 probes, 19 go 10.0.0.1 -> .2 and one goes 10.0.0.1 -> .3 -> .4.
+    common = [Answer("10.0.0.1", 1), Answer("10.0.0.2", 2), Answer("8.8.8.8", 3, reached=True)]
+    rare = [Answer("10.0.0.1", 1), Answer("10.0.0.3", 2), Answer("8.8.8.8", 3, reached=True)]
+    history = netpath.build_graph([Sweep(0, 20, [common] * 19 + [rare])], "8.8.8.8")
+    keep = netpath.likely_edges(history, history)
+    assert ("10.0.0.1", "10.0.0.2") in keep
+    # 1 in 20 is under 10%, but it's 10.0.0.3's only way in or out: kept.
+    assert ("10.0.0.1", "10.0.0.3") in keep and ("10.0.0.3", DESTINATION) in keep
+    # A second, rarer way into the host is dropped.
+    side = [Answer("10.0.0.1", 1), Answer("10.0.0.2", 2), Answer("10.0.0.3", 3),
+            Answer("8.8.8.8", 4, reached=True)]
+    history = netpath.build_graph([Sweep(0, 21, [common] * 19 + [rare, side])], "8.8.8.8")
+    assert ("10.0.0.2", "10.0.0.3") not in netpath.likely_edges(history, history)
+
+
+def test_the_window_boxes_providers_and_opens_a_box_on_double_click(qapp, monkeypatch):
+    from NetInfoView.ui import netpath_window as nw
+
+    monkeypatch.setattr(nw.NetPathWindow, "start", lambda self: None)
+    window = nw.NetPathWindow("dns.google", "8.8.8.8")
+    window.add_sweep(_into_google())
+    assert "group:GOOGLE:2" not in window.items  # no org names known yet
+    for address, org in GOOGLE.items():
+        window._on_org(address, org)
+    window.refresh_view()  # (the window does this itself once names settle)
+    box = window.items["group:GOOGLE:2"]
+    assert box.kind == "group" and box.title == "GOOGLE" and box.text == "4"
+    assert not set(GOOGLE) & set(window.items)
+    box.setSelected(True)
+    assert window.details_title.text() == "GOOGLE"
+
+    window._activate("group:GOOGLE:2")  # double-click: open the box
+    assert "group:GOOGLE:2" not in window.items and set(GOOGLE) <= set(window.items)
+    window._activate("142.0.1.1")  # double-click a hop in it: fold again
+    assert "group:GOOGLE:2" in window.items
+
+    window.group_box.setChecked(False)
+    assert set(GOOGLE) <= set(window.items)
     window.close()

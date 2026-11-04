@@ -8,7 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from PyQt6.QtCore import QCoreApplication, QPointF, QRectF, Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QCoreApplication, QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QGraphicsItem, QGraphicsObject, QGraphicsScene, QGraphicsView,
@@ -57,6 +57,8 @@ class NetPathThread(QThread):
     progress = pyqtSignal(int)
     name_ready = pyqtSignal(str, str)
     country_ready = pyqtSignal(str, str)
+    #: (address, its network's name in whois, e.g. "GOOGLE"; "" if none).
+    org_ready = pyqtSignal(str, str)
     #: Why TCP probes can't be used here; the thread has stopped.
     failed = pyqtSignal(str)
 
@@ -117,6 +119,8 @@ class NetPathThread(QThread):
     def _name(self, address: str) -> None:
         if self._stop:
             return
+        # Boxes go by AS: one name for all of a provider's blocks.
+        self.org_ready.emit(address, whois.as_org(address))
         name = (hostname.resolve(address) or whois.netname(address)
                 or whois.reserved_name(address))
         # "" too, so the window stops saying it's looking.
@@ -168,14 +172,18 @@ PAST_OPACITY = 0.4
 
 
 class NodeItem(QGraphicsObject):
-    """A hop (a circle with its hop number), this computer or the host
-    (rounded squares), with its name and address underneath."""
+    """A hop (a circle with its hop number), this computer, the host or a
+    provider's hops as one box (rounded squares), with its name and address
+    underneath."""
+
+    #: Double-clicked: a provider's box to open, or one of its hops to fold.
+    activated = pyqtSignal(str)
 
     def __init__(self, key: str, kind: str, ring: str, text: str, title: str, subtitle: str,
                  colors: dict[str, str], dashed: bool = False) -> None:
         super().__init__()
         self.key = key
-        self.kind = kind  # "router", "source" or "destination"
+        self.kind = kind  # "router", "source", "destination" or "group"
         self.ring = QColor(ring)
         self.text = text
         self.title = title
@@ -186,6 +194,10 @@ class NodeItem(QGraphicsObject):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAcceptHoverEvents(True)
         self.setZValue(2)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        self.activated.emit(self.key)
+        super().mouseDoubleClickEvent(event)
 
     def _shape_rect(self) -> QRectF:
         size = END_SIZE if self.kind != "router" else NODE_RADIUS * 2
@@ -347,6 +359,18 @@ class NetPathWindow(QWidget):
         self._follow = True  # show each new trace as it comes
         self.names: dict[str, str] = {}
         self.countries: dict[str, str] = {}
+        self.orgs: dict[str, str] = {}
+        #: Provider boxes opened to show their hops.
+        self.expanded: set[str] = set()
+        #: Every hop's box, opened or not: {hop key: group key}.
+        self.group_of: dict[str, str] = {}
+        #: Every trace in the history as one graph, hops as traced.
+        self.history_graph: PathGraph | None = None
+        # Org names come in one by one: redraw once they've settled.
+        self._regroup = QTimer(self)
+        self._regroup.setSingleShot(True)
+        self._regroup.setInterval(400)
+        self._regroup.timeout.connect(self.refresh_view)
         self.items: dict[str, NodeItem] = {}
         self._fitted = False
         self._thread: NetPathThread | None = None
@@ -409,10 +433,20 @@ class NetPathWindow(QWidget):
             button.setFixedWidth(40 if len(text) > 1 else 28)
             button.clicked.connect(slot)
             zoom.addWidget(button)
+        zoom.addSpacing(10)
+        self.group_box = QCheckBox("Group providers")
+        self.group_box.setChecked(True)
+        self.group_box.setToolTip("Show each provider's routers (e.g. GOOGLE) as one box; "
+                                  "double-click a box to open it, a hop in it to fold it again")
+        self.group_box.toggled.connect(self.refresh_view)
+        zoom.addWidget(self.group_box)
+        self.past_box = QCheckBox("Past routes")
+        self.past_box.setToolTip("Also draw, thin and gray, the routes other traces took")
+        self.past_box.toggled.connect(self.refresh_view)
+        zoom.addWidget(self.past_box)
         zoom.addStretch(1)
-        self.legend = _label("Circle = hop, numbered by distance · width = share of probe flows · "
-                             "amber ≥25 ms or ≥5% lost · red ≥100 ms or ≥10% lost · dashed = no reply · "
-                             "thin gray = route taken in other traces",
+        self.legend = _label("Circle = hop · box = a provider's hops · width = share of probes · "
+                             "amber ≥25 ms or ≥5% lost · red ≥100 ms or ≥10% lost · dashed = no reply",
                              "muted")
         zoom.addWidget(self.legend)
         graph_side = QWidget()
@@ -484,6 +518,7 @@ class NetPathWindow(QWidget):
         thread.progress.connect(lambda ttl: self.status.setText(f"Tracing {self._ip}: hop {ttl}…"))
         thread.name_ready.connect(self._on_name)
         thread.country_ready.connect(self._on_country)
+        thread.org_ready.connect(self._on_org)
         thread.finished.connect(self._on_finished)
         self._thread = thread
         self.button.setEnabled(False)
@@ -518,6 +553,8 @@ class NetPathWindow(QWidget):
         self.sweeps.clear()
         self.graphs.clear()
         self.everything = None
+        self.history_graph = None
+        self.expanded.clear()
         self.shown = -1
         self._follow = True
         self._fitted = False
@@ -549,7 +586,8 @@ class NetPathWindow(QWidget):
         if thread is not None:
             thread.stop()
             for signal in (thread.sweep_ready, thread.progress, thread.name_ready,
-                           thread.country_ready, thread.failed, thread.finished):
+                           thread.country_ready, thread.org_ready, thread.failed,
+                           thread.finished):
                 signal.disconnect()
             # Qt mustn't destroy a running QThread along with this window.
             thread.setParent(QCoreApplication.instance())
@@ -577,7 +615,7 @@ class NetPathWindow(QWidget):
             del self.sweeps[0]
             del self.graphs[0]
             self.shown -= 1
-        self.everything = netpath.build_graph(self.sweeps, self._ip)
+        self.history_graph = netpath.build_graph(self.sweeps, self._ip)
         self.history.healths = [self.trace_level(g)[0] for g in self.graphs]
         status = self._summary(result)
         if self._thread is not None and self._thread.live:
@@ -606,7 +644,35 @@ class NetPathWindow(QWidget):
         self.history_text.setText(f"Showing {stamp}" + ("" if self._follow else " · click the "
                                                        "last block to follow live"))
         self._set_health(*self.trace_level(self.graphs[index]))
-        self.render(self.graphs[index], self.everything)
+        #: The trace on screen with every hop as traced (boxes hold its keys).
+        self.raw_graph = self.graphs[index]
+        history = self.history_graph or self.graphs[index]
+        self.group_of = (netpath.provider_groups(history, self.orgs)
+                         if self.group_box.isChecked() else {})
+        folded = {key: group for key, group in self.group_of.items()
+                  if group not in self.expanded}
+        self.render(netpath.collapse(self.graphs[index], folded),
+                    netpath.collapse(history, folded))
+
+    def refresh_view(self) -> None:
+        """Draw the trace on screen again, e.g. with new groups or options."""
+        if 0 <= self.shown < len(self.sweeps):
+            self.show_sweep(self.shown)
+
+    def _on_org(self, address: str, org: str) -> None:
+        self.orgs[address] = org
+        if org:
+            self._regroup.start()
+
+    def _activate(self, key: str) -> None:
+        """Open a provider's box, or fold the one a hop belongs to."""
+        if key.startswith("group:"):
+            self.expanded.add(key)
+        elif self.group_of.get(key) in self.expanded:
+            self.expanded.discard(self.group_of[key])
+        else:
+            return
+        self.refresh_view()
 
     def trace_level(self, graph: PathGraph) -> tuple[str, list[str]]:
         """A whole trace's level, its worst hop or link, and why."""
@@ -635,10 +701,11 @@ class NetPathWindow(QWidget):
         scene.clear()
         self.items = {}
         self.edge_items = {}
-        positions = layout(everything)
+        past = self.past_box.isChecked()
+        positions = layout(everything if past else graph)
         muted = QColor(self.colors["muted"])
         # Routes taken in other traces: thin, under the ones taken now.
-        for pair, edge in everything.edges.items():
+        for pair, edge in everything.edges.items() if past else ():
             if pair in graph.edges:
                 continue
             silent = everything.nodes[edge.parent].silent or everything.nodes[edge.child].silent
@@ -648,7 +715,10 @@ class NetPathWindow(QWidget):
             item.setZValue(-1)
             item.setOpacity(0.7)
             self.edge_items[pair] = (item, False)
+        likely = netpath.likely_edges(graph, everything)
         for edge in graph.edges.values():
+            if (edge.parent, edge.child) not in likely:
+                continue  # rarely taken: left out, like low transit likelihood
             path = curve(positions[edge.parent], positions[edge.child])
             share = len(edge.flows) / max(1, graph.flows)
             silent = graph.nodes[edge.parent].silent or graph.nodes[edge.child].silent
@@ -661,12 +731,17 @@ class NetPathWindow(QWidget):
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             item = scene.addPath(path, pen)
             item.setZValue(0)
+            known = everything.edges.get((edge.parent, edge.child))
+            if known is not None and not edge.unknown:
+                item.setToolTip(f"Transit likelihood {len(known.flows) / max(1, everything.flows):.0%}"
+                                f" of the probes over {len(self.sweeps)} trace"
+                                f"{'s' * (len(self.sweeps) != 1)}")
             self.edge_items[(edge.parent, edge.child)] = (item, True)
             latency = graph.edge_latency(edge)
             if latency is not None:
                 self._add_pill(scene, path.pointAtPercent(0.5), format_latency(latency))
         reached = graph.nodes[DESTINATION].rtts
-        for key in everything.nodes:
+        for key in everything.nodes if past else graph.nodes:
             node = graph.nodes.get(key)
             if node is None:  # a hop of another trace's route
                 past = everything.nodes[key]
@@ -682,6 +757,16 @@ class NetPathWindow(QWidget):
                 level, _ = self.node_condition(graph, key)
                 item = NodeItem(key, "destination", LEVEL_COLORS[level], "◎",
                                 self._title, self._ip, self.colors, dashed=not reached)
+            elif node.members:
+                ring = LEVEL_COLORS[self.node_condition(graph, key)[0]]
+                routers = [m for m in node.members if not self.raw_graph.nodes[m].silent]
+                last = max((self.history_graph.nodes[m].ttl for m in node.members
+                            if self.history_graph and m in self.history_graph.nodes),
+                           default=node.ttl)
+                hops = f"hop {node.ttl}" if last == node.ttl else f"hops {node.ttl}–{last}"
+                item = NodeItem(key, "group", ring, str(len(routers) or len(node.members)),
+                                node.label, f"{len(routers)} routers · {hops}", self.colors)
+                item.setToolTip("Double-click to show this provider's routers")
             elif node.silent:
                 item = NodeItem(key, "router", self.colors["muted"], str(node.ttl), "No reply",
                                 "", self.colors, dashed=True)
@@ -691,6 +776,7 @@ class NetPathWindow(QWidget):
                 item = NodeItem(key, "router", ring, str(node.ttl), name or node.address,
                                 node.address if name else "", self.colors)
             item.setPos(positions[key])
+            item.activated.connect(self._activate)
             scene.addItem(item)
             self.items[key] = item
         scene.setSceneRect(scene.itemsBoundingRect().adjusted(-40, -40, 40, 40))
@@ -775,6 +861,26 @@ class NetPathWindow(QWidget):
         else:
             self._details_for_node(graph, key)
 
+    def _details_for_group(self, graph: PathGraph, key: str) -> None:
+        """A provider's hops shown as one box."""
+        node = graph.nodes[key]
+        members = [self.raw_graph.nodes[m] for m in node.members]
+        routers = sorted((m for m in members if m.address), key=lambda m: (m.ttl, m.address))
+        latency = node.latency()
+        listed = "\n".join(f"{m.ttl}: {m.address}" for m in routers[:12])
+        if len(routers) > 12:
+            listed += f"\n… and {len(routers) - 12} more"
+        rows = [
+            ("Provider", node.label),
+            ("Routers", f"{len(routers)} on this trace"),
+            ("Flows", f"{len(node.flows)} of {graph.flows}"),
+            ("Latency", format_range(latency) if latency else "—"),
+            ("Status", "\n".join(self.node_condition(graph, key)[1]) or "Normal"),
+            ("Hops", listed or "—"),
+            ("Open", "Double-click the box to show each router"),
+        ]
+        self._set_rows(node.label, rows)
+
     def _details_for_past(self, key: str) -> None:
         """A hop the trace on screen didn't pass, from the other traces."""
         node = self.everything.nodes[key]
@@ -822,8 +928,9 @@ class NetPathWindow(QWidget):
 
     def _details_for_path(self, graph: PathGraph) -> None:
         hops = max((n.ttl for k, n in graph.nodes.items() if k != DESTINATION), default=0)
-        routers = sum(1 for k, n in graph.nodes.items() if k not in (SOURCE, DESTINATION)
-                      and not n.silent)
+        # Every router that answered, those inside providers' boxes too.
+        routers = sum(1 for key, node in self.raw_graph.nodes.items()
+                      if key not in (SOURCE, DESTINATION) and not node.silent)
         splits = sum(1 for k in graph.nodes
                      if sum(1 for e in graph.edges.values() if e.parent == k) > 1)
         end = graph.nodes[DESTINATION].latency()
@@ -831,6 +938,9 @@ class NetPathWindow(QWidget):
             ("Destination", f"{self._title}\n{self._ip}" if self._title != self._ip else self._ip),
             ("Reached", f"{graph.reached} of {graph.flows} probe flows"),
             ("Probe", self.probe_text()),
+            ("Links", "Each probe has its own source port, so between hops that branch the "
+                      "links are inferred from samples" if self.probe_port() is not None
+             else "Traced per flow"),
             ("Hops", str(hops)),
             ("Routers", str(routers)),
             ("Branch points", str(splits) if splits else "None: a single route"),
@@ -840,13 +950,17 @@ class NetPathWindow(QWidget):
         for key, node in sorted(graph.nodes.items(), key=lambda item: item[1].ttl):
             level, reasons = self.node_condition(graph, key)
             if level != netpath.OK:
-                where = self._title if key == DESTINATION else f"Hop {node.ttl} ({node.address})"
+                where = (self._title if key == DESTINATION else node.label if node.members
+                         else f"Hop {node.ttl} ({node.address})")
                 problems.append(f"{where}: {'; '.join(reasons)}")
         rows.append(("Problems", "\n".join(problems[:4]) if problems else "None"))
         self._set_rows("Path overview", rows)
 
     def _details_for_node(self, graph: PathGraph, key: str) -> None:
         node = graph.nodes[key]
+        if node.members:
+            self._details_for_group(graph, key)
+            return
         if key == SOURCE:
             name, address = self._source
             self._set_rows(name, [("Address", address or "—"), ("Role", "Where the probes start")])

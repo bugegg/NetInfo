@@ -251,10 +251,13 @@ class Node:
     unreachable: bool = False
     #: Flows last seen here that never reached the host: where they were lost.
     dropped: set[int] = field(default_factory=set)
+    #: For a provider's hops shown as one (collapse()): the keys of its hops.
+    members: list[str] = field(default_factory=list)
+    label: str = ""
 
     @property
     def silent(self) -> bool:
-        return self.key not in (SOURCE, DESTINATION) and not self.address
+        return self.key not in (SOURCE, DESTINATION) and not self.address and not self.members
 
     def latency(self) -> tuple[float, float, float] | None:
         """(min, avg, max) in ms, None if it never answered."""
@@ -406,3 +409,117 @@ def loss_level(node: Node) -> tuple[str, str]:
     if level == OK:
         return OK, ""
     return level, f"{len(node.dropped)} of {len(node.flows)} flows lost after this hop"
+
+
+# -- one box per provider ------------------------------------------------------
+
+#: A provider's hops are shown as one box when it has at least this many.
+GROUP_MIN_ROUTERS = 3
+#: Hops of one provider further apart than this are separate boxes.
+GROUP_MAX_GAP = 2
+
+
+def provider_groups(graph: PathGraph, orgs: dict[str, str],
+                    min_routers: int = GROUP_MIN_ROUTERS) -> dict[str, str]:
+    """Which hops to show as one box per provider, as {hop key: group key},
+    the way SolarWinds NetPath folds a provider's network into one node.
+    `orgs` names each address's network (whois netname, e.g. "GOOGLE"); a
+    provider's hops form a box when there are at least `min_routers` of
+    them close together. Silent hops entered only from a box, leading
+    only back into it or to the host, join it."""
+    by_org: dict[str, list[Node]] = {}
+    for key, node in graph.nodes.items():
+        org = orgs.get(node.address) if key not in (SOURCE, DESTINATION) else ""
+        if org:
+            by_org.setdefault(org, []).append(node)
+    group_of: dict[str, str] = {}
+    for org, nodes in by_org.items():
+        nodes.sort(key=lambda n: n.ttl)
+        runs = [[nodes[0]]]
+        for node in nodes[1:]:
+            if node.ttl - runs[-1][-1].ttl > GROUP_MAX_GAP:
+                runs.append([node])
+            else:
+                runs[-1].append(node)
+        for run in runs:
+            if len(run) >= min_routers:
+                for node in run:
+                    group_of[node.key] = f"group:{org}:{run[0].ttl}"
+    changed = True
+    while changed:
+        changed = False
+        for key, node in graph.nodes.items():
+            if not node.silent or key in group_of:
+                continue
+            # Entered only from one box, and leading only back into it or
+            # on to the host: a router of that provider that kept quiet.
+            ins = {group_of.get(e.parent) for e in graph.edges.values() if e.child == key}
+            outs = {group_of.get(e.child) for e in graph.edges.values()
+                    if e.parent == key and not e.unknown and e.child != DESTINATION}
+            if len(ins) == 1 and None not in ins and outs <= ins:
+                group_of[key] = ins.pop()
+                changed = True
+    return group_of
+
+
+def group_label(group: str) -> str:
+    """"GOOGLE" for "group:GOOGLE:11"."""
+    return group.split(":", 2)[1] if group.startswith("group:") else group
+
+
+def collapse(graph: PathGraph, group_of: dict[str, str]) -> PathGraph:
+    """`graph` with each group's hops as one node: its flows, losses and
+    flags together, its latency that of the hops where routes enter it, and
+    links within it dropped."""
+    nodes: dict[str, Node] = {}
+    for key, node in graph.nodes.items():
+        group = group_of.get(key)
+        if group is None:
+            nodes[key] = node
+            continue
+        box = nodes.get(group)
+        if box is None:
+            box = nodes[group] = Node(group, ttl=node.ttl, label=group_label(group))
+        box.members.append(key)
+        box.ttl = min(box.ttl, node.ttl)
+        box.flows |= node.flows
+        box.dropped |= node.dropped
+        box.unreachable |= node.unreachable
+    for box in nodes.values():
+        if box.members:
+            box.rtts = [rtt for key in box.members if graph.nodes[key].ttl == box.ttl
+                        for rtt in graph.nodes[key].rtts]
+    edges: dict[tuple[str, str], Edge] = {}
+    for (parent, child), edge in graph.edges.items():
+        parent, child = group_of.get(parent, parent), group_of.get(child, child)
+        if parent == child:
+            continue
+        merged = edges.setdefault((parent, child), Edge(parent, child, unknown=edge.unknown))
+        merged.flows |= edge.flows
+        merged.unknown = merged.unknown and edge.unknown
+    return PathGraph(nodes, edges, graph.flows, graph.reached)
+
+
+#: Links fewer probes than this share of them took are left out of the
+#: drawing, like low transit likelihood in SolarWinds NetPath.
+MIN_LIKELIHOOD = 0.10
+
+
+def likely_edges(graph: PathGraph, everything: PathGraph,
+                 floor: float = MIN_LIKELIHOOD) -> set[tuple[str, str]]:
+    """The links of `graph` worth drawing: those taken by at least `floor`
+    of the probes over the whole history (`everything`), plus, for any hop
+    that would be left with none in or none out, its most-taken link."""
+    def likelihood(pair: tuple[str, str]) -> float:
+        edge = everything.edges.get(pair) or graph.edges[pair]
+        total = everything.flows if pair in everything.edges else graph.flows
+        return len(edge.flows) / max(1, total)
+
+    keep = {pair for pair, edge in graph.edges.items()
+            if edge.unknown or likelihood(pair) >= floor}
+    for key in graph.nodes:
+        for side in (0, 1):  # 0: links out of the hop, 1: links into it
+            own = [pair for pair in graph.edges if pair[side] == key]
+            if own and not any(pair in keep for pair in own):
+                keep.add(max(own, key=likelihood))
+    return keep
