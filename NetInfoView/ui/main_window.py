@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 import time
 
-from PyQt6.QtCore import QCoreApplication, QItemSelectionModel, Qt, QTimer, QUrl
+from PyQt6.QtCore import QCoreApplication, Qt, QTimer, QUrl
 from PyQt6.QtGui import (
     QAction,
     QActionGroup,
@@ -22,7 +22,6 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMainWindow,
-    QMenu,
     QMessageBox,
     QSplitter,
     QStyle,

@@ -45,9 +45,23 @@ def load() -> bool:
     return _loaded
 
 
+#: mono() results by size: the grid asks for one for every IP and MAC cell
+#: it paints, and building a font (and listing the families) each time
+#: shows up in profiles.
+_mono_cache: dict[tuple[int, float], QFont] = {}
+
+
 def mono(size_like: QFont | None = None) -> QFont:
     """The monospaced font for IPs, MACs and raw output, at the pixel size
     of `size_like` if given."""
+    size = (0, 0.0) if size_like is None else (size_like.pixelSize(), size_like.pointSizeF())
+    cached = _mono_cache.get(size)
+    if cached is None:
+        cached = _mono_cache[size] = _build_mono(size_like)
+    return QFont(cached)
+
+
+def _build_mono(size_like: QFont | None) -> QFont:
     if load() and MONO_FAMILY in QFontDatabase.families():
         font = QFont(MONO_FAMILY)
         font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)

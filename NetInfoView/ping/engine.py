@@ -11,7 +11,7 @@ import asyncio
 import socket
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from ..osinfo import IS_WINDOWS
 from .icmp import IcmpPinger
