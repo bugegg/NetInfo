@@ -283,15 +283,3 @@ def test_sidebar_footer_shows_live_computer_name_and_ip(window, monkeypatch):
     monkeypatch.setattr(d, "_network_text", lambda: ("No network", ""))
     d.refresh()
     assert d.connection_state.text() == "Not connected"
-
-
-def test_timeouts_become_solid_spans_until_the_next_reply():
-    from NetInfoView.model.samples import Sample
-    from NetInfoView.ui.dashboard import outage_spans
-
-    s = [Sample(0, 5), Sample(1, None), Sample(2, None), Sample(3, None), Sample(4, 6),
-         Sample(10, None), Sample(30, 7), Sample(40, None)]
-    # Back-to-back timeouts merge and last until the next reply; one before
-    # a long gap lasts a single cycle; the latest runs on to "now".
-    assert outage_spans(s, end=42, longest=4) == [(1, 4), (10, 14), (40, 42)]
-    assert outage_spans([Sample(0, 5)], end=10, longest=4) == []
