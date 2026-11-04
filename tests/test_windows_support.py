@@ -309,3 +309,11 @@ def test_npcap_listen_reports_each_switch_port_once(monkeypatch):
     assert [(n.interface, n.protocol) for n in heard] == [("good", "LLDP"), ("good", "CDP")]
     assert errors == [("bad", "access denied")]
 
+
+
+def test_downloads_are_verified_by_the_operating_system():
+    import truststore
+
+    from pinginfoview.https import ssl_context
+
+    assert isinstance(ssl_context(), truststore.SSLContext)

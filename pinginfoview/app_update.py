@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import __version__
+from .https import urlopen
 from .osinfo import IS_WINDOWS
 
 #: ``owner/name`` of the public GitHub repository that publishes releases.
@@ -107,7 +108,7 @@ def fetch_latest_release(url: str = LATEST_RELEASE_URL) -> Release:
         headers={"User-Agent": _USER_AGENT, "Accept": "application/vnd.github+json"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
+        with urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
@@ -121,7 +122,7 @@ def fetch_latest_release(url: str = LATEST_RELEASE_URL) -> Release:
 def download(url: str, dest: Path) -> Path:
     request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     try:
-        with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response, \
+        with urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response, \
                 open(dest, "wb") as out:
             while chunk := response.read(1 << 16):
                 out.write(chunk)
