@@ -1,5 +1,5 @@
-"""PingInfoView for macOS."""
+"""NetInfo: a ping monitor for macOS."""
 
 #: The app's version. A release build overwrites this from the git tag
 #: (see .github/workflows/release.yml), so tagging ``v1.2`` ships 1.2.
-__version__ = "1.1"
+__version__ = "1.2"

@@ -1,7 +1,7 @@
 """Self-update from GitHub Releases.
 
 Each release (built by .github/workflows/release.yml) carries a zip of the
-.app per CPU type, named ``PingInfoView-<version>-<arch>.zip``. This module
+.app per CPU type, named ``NetInfo-<version>-<arch>.zip``. This module
 finds the newest release, downloads the zip for this Mac, and swaps it in for
 the running bundle. Kept free of Qt so it's testable without an event loop;
 ui/app_update_thread.py runs it off the GUI thread.
@@ -32,7 +32,7 @@ from . import __version__
 GITHUB_REPO = "bugegg/NetInfo"
 LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _REQUEST_TIMEOUT_SECONDS = 30
-_USER_AGENT = f"PingInfoView/{__version__}"
+_USER_AGENT = f"NetInfo/{__version__}"
 
 
 class AppUpdateError(Exception):
@@ -122,7 +122,7 @@ def running_app_bundle() -> Path | None:
     """The .app this process runs from, or None when run from source."""
     if not getattr(sys, "frozen", False):
         return None
-    # .../PingInfoView.app/Contents/MacOS/PingInfoView
+    # .../NetInfo.app/Contents/MacOS/NetInfo
     bundle = Path(sys.executable).resolve().parents[2]
     return bundle if bundle.suffix == ".app" else None
 
@@ -148,7 +148,7 @@ def download_and_extract(release: Release) -> Path:
         raise AppUpdateError(
             f"Version {release.version} has no download for this Mac ({platform.machine()})."
         )
-    work = Path(tempfile.mkdtemp(prefix="PingInfoView-update-"))
+    work = Path(tempfile.mkdtemp(prefix="NetInfo-update-"))
     zip_path = download(release.asset_url, work / "update.zip")
     return extract_app(zip_path, work / "extracted")
 
@@ -183,7 +183,7 @@ def install_and_relaunch(new_app: Path, target_app: Path) -> None:
         raise AppUpdateError(
             f"No permission to replace the app in {target_app.parent}."
         )
-    script = Path(tempfile.mkstemp(prefix="PingInfoView-install-", suffix=".sh")[1])
+    script = Path(tempfile.mkstemp(prefix="NetInfo-install-", suffix=".sh")[1])
     script.write_text(installer_script(new_app, target_app, os.getpid()))
     script.chmod(0o700)
     subprocess.Popen(

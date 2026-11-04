@@ -98,7 +98,7 @@ def friendly_name(description: str) -> str:
 
 
 def _fetch_description(url: str) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": "PingInfoView"})
+    request = urllib.request.Request(url, headers={"User-Agent": "NetInfo"})
     with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT) as response:
         return response.read(MAX_DESCRIPTION_BYTES).decode("utf-8", "replace")
 

@@ -8,4 +8,4 @@ dist/
 *.spec
 
 # Dev launcher: holds this machine's absolute path.
-PingInfoView.app/Contents/MacOS/
+NetInfo.app/Contents/MacOS/

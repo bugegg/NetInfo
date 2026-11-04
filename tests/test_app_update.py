@@ -19,8 +19,8 @@ RELEASE_JSON = {
     "body": "What's new",
     "html_url": "https://github.com/o/r/releases/tag/v1.2",
     "assets": [
-        {"name": "PingInfoView-1.2-x86_64.zip", "browser_download_url": "https://x/intel.zip"},
-        {"name": "PingInfoView-1.2-arm64.zip", "browser_download_url": "https://x/arm.zip"},
+        {"name": "NetInfo-1.2-x86_64.zip", "browser_download_url": "https://x/intel.zip"},
+        {"name": "NetInfo-1.2-arm64.zip", "browser_download_url": "https://x/arm.zip"},
     ],
 }
 
@@ -67,8 +67,8 @@ def test_running_app_bundle_is_none_from_source():
 
 def test_running_app_bundle_when_frozen(monkeypatch):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", "/Applications/PingInfoView.app/Contents/MacOS/PingInfoView")
-    assert running_app_bundle() == Path("/Applications/PingInfoView.app")
+    monkeypatch.setattr(sys, "executable", "/Applications/NetInfo.app/Contents/MacOS/NetInfo")
+    assert running_app_bundle() == Path("/Applications/NetInfo.app")
 
 
 def test_download_and_extract_refuses_release_without_asset():
@@ -78,7 +78,7 @@ def test_download_and_extract_refuses_release_without_asset():
 
 
 def test_extract_app_finds_the_bundle(tmp_path):
-    src = tmp_path / "src" / "PingInfoView.app" / "Contents"
+    src = tmp_path / "src" / "NetInfo.app" / "Contents"
     src.mkdir(parents=True)
     (src / "Info.plist").write_text("x")
     zip_path = tmp_path / "u.zip"
@@ -86,16 +86,16 @@ def test_extract_app_finds_the_bundle(tmp_path):
         ["ditto", "-c", "-k", "--keepParent", str(src.parent), str(zip_path)], check=True
     )
     app = app_update.extract_app(zip_path, tmp_path / "out")
-    assert app.name == "PingInfoView.app"
+    assert app.name == "NetInfo.app"
     assert (app / "Contents" / "Info.plist").read_text() == "x"
 
 
 def test_installer_script_swaps_in_the_new_bundle(tmp_path):
     work = tmp_path / "work"
-    new_app = work / "extracted" / "PingInfoView.app"
+    new_app = work / "extracted" / "NetInfo.app"
     (new_app / "Contents").mkdir(parents=True)
     (new_app / "Contents" / "v").write_text("new")
-    target = tmp_path / "Apps" / "PingInfoView.app"
+    target = tmp_path / "Apps" / "NetInfo.app"
     (target / "Contents").mkdir(parents=True)
     (target / "Contents" / "v").write_text("old")
 

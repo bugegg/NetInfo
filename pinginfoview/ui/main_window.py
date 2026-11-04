@@ -91,7 +91,7 @@ class MainWindow(QMainWindow):
         #: Attempts made so far per host key, capped at DEVICE_INFO_MAX_ATTEMPTS.
         self._device_info_attempts: dict[int, int] = {}
 
-        self.setWindowTitle("PingInfoView")
+        self.setWindowTitle("NetInfo")
         self.resize(1100, 620)
 
         self._model = HostTableModel()
@@ -1145,14 +1145,14 @@ class MainWindow(QMainWindow):
             if not silent:
                 QMessageBox.information(
                     self, "Check for Updates",
-                    f"PingInfoView {__version__} is the latest version.",
+                    f"NetInfo {__version__} is the latest version.",
                 )
             return
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Information)
         box.setWindowTitle("Update Available")
         box.setText(
-            f"PingInfoView {release.version} is available "
+            f"NetInfo {release.version} is available "
             f"(you have {__version__})."
         )
         if release.notes:
@@ -1160,7 +1160,7 @@ class MainWindow(QMainWindow):
         bundle = running_app_bundle()
         if bundle is not None and release.asset_url:
             box.setInformativeText(
-                "Install it now? PingInfoView will restart; your settings are kept."
+                "Install it now? NetInfo will restart; your settings are kept."
             )
             install = box.addButton("Install and Restart", QMessageBox.ButtonRole.AcceptRole)
         else:
@@ -1190,7 +1190,7 @@ class MainWindow(QMainWindow):
 
     def _start_update_download(self, release: Release) -> None:
         self.action_check_updates.setEnabled(False)
-        self.statusBar().showMessage(f"Downloading PingInfoView {release.version}...")
+        self.statusBar().showMessage(f"Downloading NetInfo {release.version}...")
         thread = UpdateDownloadThread(release)
         thread.downloaded.connect(self._on_update_downloaded)
         thread.failed.connect(self._on_update_download_failed)
@@ -1235,11 +1235,11 @@ class MainWindow(QMainWindow):
             )
         QMessageBox.about(
             self,
-            "About PingInfoView",
-            f"<b>PingInfoView {__version__}</b><br>A ping monitor for macOS.<br><br>"
+            "About NetInfo",
+            f"<b>NetInfo {__version__}</b><br>A ping monitor for macOS.<br><br>"
             "Pings many hosts on an interval over ICMP or TCP and reports "
             "per-host statistics.<br><br>"
-            "A clean-room reimplementation of NirSoft's Windows utility.<br><br>"
+            "A clean-room reimplementation of NirSoft's PingInfoView for Windows.<br><br>"
             f"{vendor_line}",
         )
 

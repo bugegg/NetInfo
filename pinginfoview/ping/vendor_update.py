@@ -12,6 +12,8 @@ import time
 import urllib.error
 import urllib.request
 
+from .. import __version__
+
 IEEE_OUI_CSV_URL = "https://standards-oui.ieee.org/oui/oui.csv"
 _REQUEST_TIMEOUT_SECONDS = 30
 
@@ -21,7 +23,7 @@ class VendorUpdateError(Exception):
 
 
 def fetch_oui_csv(url: str = IEEE_OUI_CSV_URL) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": "PingInfoView/1.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": f"NetInfo/{__version__}"})
     try:
         with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
             return response.read().decode("utf-8", errors="replace")

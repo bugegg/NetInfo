@@ -11,6 +11,8 @@ from enum import Enum
 
 from .ping.port_scan import DEFAULT_PORTS_TEXT as _DEFAULT_PORT_SCAN_PORTS
 
+#: Where settings and the vendor database are stored. These keep the app's
+#: original name so renaming it to NetInfo didn't lose anyone's settings.
 ORGANISATION = "pinginfoview"
 APPLICATION = "PingInfoView"
 
