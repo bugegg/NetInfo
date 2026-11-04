@@ -22,6 +22,7 @@ rm -rf build dist
     --osx-bundle-identifier net.local.NetInfoView \
     --exclude-module tkinter \
     --exclude-module pytest \
+    --add-data NetInfoView/fonts:NetInfoView/fonts \
     packaging/launch.py
 
 PLIST=dist/NetInfoView.app/Contents/Info.plist

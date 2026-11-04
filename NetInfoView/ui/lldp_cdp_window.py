@@ -5,7 +5,6 @@ and VLAN it is plugged into (ping/lldp_cdp.py)."""
 from __future__ import annotations
 
 from PyQt6.QtCore import QCoreApplication, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -19,6 +18,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from . import fonts
 from ..ping import arp
 from ..ping.lldp_cdp import DEFAULT_LISTEN_SECONDS, Neighbor, capture_unavailable, listen
 from ..ping.network_interfaces import ethernet_interfaces
@@ -139,7 +139,7 @@ class LldpCdpWindow(QWidget):
 
         self.text = QPlainTextEdit()
         self.text.setReadOnly(True)
-        self.text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self.text.setFont(fonts.mono())
         self.text.setPlaceholderText("Waiting for LLDP/CDP announcements...")
 
         self.progress = QProgressBar()
