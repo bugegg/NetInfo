@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFontDialog,
     QHeaderView,
+    QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -44,6 +45,7 @@ from ..ping.engine import EngineOptions
 from ..ping.icmp import _IP_DONTFRAG
 from ..ping.network_interfaces import list_interfaces as list_network_interfaces
 from ..settings import DisplayMode, HistoryMode, Settings
+from .dashboard import Dashboard, apply_theme
 from .add_hosts_dialog import AddHostsDialog
 from .app_update_thread import UpdateCheckThread, UpdateDownloadThread
 from .device_info_thread import DeviceInfoThread
@@ -93,7 +95,8 @@ class MainWindow(QMainWindow):
         self._device_info_attempts: dict[int, int] = {}
 
         self.setWindowTitle("NetInfoView")
-        self.resize(1100, 620)
+        self.resize(1440, 900)
+        self.setMinimumSize(1050, 680)
 
         self._model = HostTableModel()
         self._model.mark_odd_even = settings.mark_odd_even_rows
@@ -121,9 +124,14 @@ class MainWindow(QMainWindow):
         self._build_views()
         self._build_actions()
         self._build_context_menu()
-        self._build_toolbar()
+        self._register_shortcuts()
+        self._last_scan_label = QLabel()
+        self.statusBar().addPermanentWidget(self._last_scan_label)
+        self.takeCentralWidget()
+        self._dashboard = Dashboard(self, list_network_interfaces())
+        self.setCentralWidget(self._dashboard)
 
-        self.statusBar().showMessage("0 item(s)")
+        self.statusBar().showMessage("0 devices")
         self._apply_view_settings()
 
         self._device_info_timer = QTimer(self)
@@ -365,10 +373,9 @@ class MainWindow(QMainWindow):
     def _build_context_menu(self) -> None:
         """Everything that used to live in the top menu bar, and then in the
         toolbar's dropdown, ends up here instead: the table's own right-click
-        menu. Options keeps a dedicated toolbar button that opens its dialog
-        directly (no dropdown at all), and Update MAC Vendor Database and
-        Check for Updates keep their own toolbar buttons too, so none of them
-        is duplicated here.
+        menu. Options, Update MAC Vendor Database and Check for Updates are
+        in the sidebar (ui/dashboard.py) instead, so they aren't duplicated
+        here.
         """
         self._table.addAction(self.action_copy)
         self._table.addAction(self.action_properties)
@@ -436,21 +443,13 @@ class MainWindow(QMainWindow):
         self._add_table_separator()
         self._table.addAction(self.action_about)
 
-    def _build_toolbar(self) -> None:
-        toolbar = self.addToolBar("Main")
-        toolbar.setMovable(False)
-        for action in (
-            self.action_start, self.action_stop, None,
-            self.action_add, self.action_clear_all, None,
-            self.action_lldp_cdp, None,
-            self.action_options, self.action_update_vendor_db,
-            self.action_check_updates,
-        ):
-            toolbar.addSeparator() if action is None else toolbar.addAction(action)
-        # The other buttons' icons say what they do; this one needs its label.
-        toolbar.widgetForAction(self.action_lldp_cdp).setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
+    def _register_shortcuts(self) -> None:
+        """The sidebar and header buttons show these actions, but a shortcut
+        only fires for an action on a visible widget: put them all on the
+        window itself so F5, Ctrl+N and the rest work wherever focus is."""
+        for action in self.findChildren(QAction):
+            if not action.shortcut().isEmpty():
+                self.addAction(action)
 
     # -- host list ---------------------------------------------------------
 
@@ -998,25 +997,20 @@ class MainWindow(QMainWindow):
     # -- view options ------------------------------------------------------
 
     def _apply_view_settings(self) -> None:
-        self._history_view.setVisible(self.settings.show_history_pane)
+        self._dashboard.inspector.setVisible(self.settings.show_history_pane)
         self._toggle_always_on_top(self.settings.always_on_top)
         self._apply_palette()
         if self.settings.font_family:
             self._apply_font(QFont(self.settings.font_family, self.settings.font_size or -1))
 
     def _apply_palette(self) -> None:
-        if self.settings.dark_background:
-            style = "QTableView { background-color: #111; color: #ddd; gridline-color: #333; }"
-        else:
-            style = ""
-        self._table.setStyleSheet(style)
-        self._history_view.setStyleSheet(style)
+        apply_theme(self)
 
     def _apply_font(self, font: QFont) -> None:
         self._table.setFont(font)
         self._history_view.setFont(font)
-        self._table.verticalHeader().setDefaultSectionSize(font.pointSize() + 12)
-        self._history_view.verticalHeader().setDefaultSectionSize(font.pointSize() + 12)
+        self._table.verticalHeader().setDefaultSectionSize(max(34, font.pointSize() + 18))
+        self._history_view.verticalHeader().setDefaultSectionSize(max(34, font.pointSize() + 18))
 
     def choose_font(self) -> None:
         font, ok = QFontDialog.getFont(self._table.font(), self, "Choose Font")
@@ -1035,6 +1029,7 @@ class MainWindow(QMainWindow):
         Succeeded/Failed hides every one of them — and since display_mode is
         saved between sessions, adding hosts looked like it did nothing.
         Switch back to Show All Hosts so they're visible."""
+        self._dashboard.search.clear()
         if self._proxy.display_mode is not DisplayMode.ALL:
             self._set_display_mode(DisplayMode.ALL)
 
@@ -1055,7 +1050,7 @@ class MainWindow(QMainWindow):
 
     def _toggle_history_pane(self, checked: bool) -> None:
         self.settings.show_history_pane = checked
-        self._history_view.setVisible(checked)
+        self._dashboard.inspector.setVisible(checked)
 
     def _toggle_auto_scroll(self, checked: bool) -> None:
         self.settings.auto_scroll_history = checked
@@ -1255,16 +1250,18 @@ class MainWindow(QMainWindow):
         total = self._proxy.rowCount()
         selected = len(self._table.selectionModel().selectedRows())
         state = "Pinging" if self._engine is not None else "Stopped"
-        message = f"{total} item(s), {state}"
+        message = f"{total} devices · {state}"
         # Say when a filter is hiding rows, or newly added hosts (not yet
         # pinged) look as if they were never added under Show Only Succeeded.
         hidden = self._model.rowCount() - total
         if hidden:
-            message += f", {hidden} hidden by filter"
+            message += f" · {hidden} hidden by filter"
         if selected:
-            message += f", {selected} Selected"
+            message += f" · {selected} selected"
         self.statusBar().showMessage(message)
         self._history_proxy.set_filter_keys({e.key for e in self._selected_entries()})
+        if hasattr(self, "_dashboard"):
+            self._dashboard.refresh()
 
     # -- shutdown ----------------------------------------------------------
 

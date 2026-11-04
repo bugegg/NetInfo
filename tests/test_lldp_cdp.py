@@ -4,7 +4,7 @@ import os
 import struct
 
 import pytest
-from PyQt6.QtWidgets import QApplication, QToolBar
+from PyQt6.QtWidgets import QApplication, QToolButton
 
 from NetInfoView.ping import lldp_cdp
 from NetInfoView.ping.lldp_cdp import Neighbor
@@ -399,7 +399,10 @@ def test_button_opens_the_interface_picker(qapp, tmp_path, monkeypatch):
     win = MainWindow(Settings())
     try:
         assert win.action_lldp_cdp in win._table.actions()
-        assert win.action_lldp_cdp in win.findChild(QToolBar).actions()
+        discovery = next(
+            b for b in win._dashboard.findChildren(QToolButton) if b.text() == "Discovery"
+        )
+        assert win.action_lldp_cdp in discovery.menu().actions()
         window = win.check_lldp_cdp()  # no host selected: fine
         assert window.isVisible() and not window.running
         assert window.interface.currentData() == "en7"

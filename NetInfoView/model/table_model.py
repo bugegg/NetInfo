@@ -165,6 +165,23 @@ class HostFilterProxy(QSortFilterProxyModel):
         self.setSortRole(SORT_ROLE)
         self.display_mode = DisplayMode.ALL
         self.hide_disabled = False
+        self.search_text = ""
+        #: Column index -> header text shown instead of the column's title
+        #: (exports keep the full titles; the grid can use shorter ones).
+        self.header_titles: dict[int, str] = {}
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if (
+            role == Qt.ItemDataRole.DisplayRole
+            and orientation == Qt.Orientation.Horizontal
+            and section in self.header_titles
+        ):
+            return self.header_titles[section]
+        return super().headerData(section, orientation, role)
+
+    def set_search_text(self, text: str) -> None:
+        self.search_text = text.strip().casefold()
+        self.invalidateFilter()
 
     def set_display_mode(self, mode: DisplayMode) -> None:
         self.display_mode = mode
@@ -202,12 +219,20 @@ class HostFilterProxy(QSortFilterProxyModel):
     def filterAcceptsRow(self, row: int, parent: QModelIndex) -> bool:
         # Qt re-asks about every row of each dataChanged, several times a
         # second; with nothing to filter out, answer before any lookups.
-        if self.display_mode is DisplayMode.ALL and not self.hide_disabled:
+        if self.display_mode is DisplayMode.ALL and not self.hide_disabled and not self.search_text:
             return True
         source = self.sourceModel()
         entry = source.entry_at(row) if isinstance(source, HostTableModel) else None
         if entry is None:
             return True
+        if self.search_text and not any(
+            self.search_text in str(value).casefold()
+            for value in (
+                entry.host, entry.ip_address, entry.hostname, entry.mac_address,
+                entry.dns_name, entry.vendor, entry.description, entry.group,
+            )
+        ):
+            return False
         if self.hide_disabled and not entry.enabled:
             return False
         if self.display_mode is DisplayMode.ALL:
