@@ -11,12 +11,13 @@ from datetime import datetime
 from PyQt6.QtCore import QCoreApplication, QPointF, QRectF, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
-    QCheckBox, QFrame, QGraphicsItem, QGraphicsObject, QGraphicsScene, QGraphicsView,
-    QGridLayout, QHBoxLayout, QLabel, QPushButton, QSplitter, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFrame, QGraphicsItem, QGraphicsObject, QGraphicsScene, QGraphicsView,
+    QGridLayout, QHBoxLayout, QLabel, QPushButton, QSpinBox, QSplitter, QVBoxLayout, QWidget,
 )
 
 from ..ping import hostname, netpath, whois
 from ..ping.netpath import DESTINATION, SOURCE, PathGraph, Sweep
+from ..ping.netpath_tcp import DEFAULT_PORT, TcpProber, TcpUnavailable
 from .tracepath_window import country_flag, country_label
 
 #: Seconds between traces while Live is on.
@@ -56,12 +57,18 @@ class NetPathThread(QThread):
     progress = pyqtSignal(int)
     name_ready = pyqtSignal(str, str)
     country_ready = pyqtSignal(str, str)
+    #: Why TCP probes can't be used here; the thread has stopped.
+    failed = pyqtSignal(str)
 
-    def __init__(self, ip: str, live: bool = True, probe=None) -> None:
+    def __init__(self, ip: str, live: bool = True, probe=None,
+                 port: int | None = DEFAULT_PORT) -> None:
+        """Probes are TCP SYNs to `port`, or ICMP echoes if it's None; a
+        `probe` given overrides both (tests)."""
         super().__init__()
         self._ip = ip
         self.live = live
         self._probe = probe
+        self._port = port
         self._stop = False
         self._looked_up: set[str] = set()
 
@@ -72,8 +79,18 @@ class NetPathThread(QThread):
         self._lookups = ThreadPoolExecutor(max_workers=NAME_WORKERS)
         try:
             while not self._stop:
-                result = netpath.sweep(self._ip, self._probe, stopped=lambda: self._stop,
-                                       on_ttl=self.progress.emit)
+                probe, prober = self._probe, None
+                if probe is None and self._port is not None:
+                    probe = prober = TcpProber(self._port)
+                try:
+                    result = netpath.sweep(self._ip, probe, stopped=lambda: self._stop,
+                                           on_ttl=self.progress.emit)
+                except TcpUnavailable as error:
+                    self.failed.emit(str(error))
+                    break
+                finally:
+                    if prober is not None:
+                        prober.close()
                 if self._stop:
                     break
                 self.sweep_ready.emit(result)
@@ -308,7 +325,7 @@ class NetPathWindow(QWidget):
 
     def __init__(self, title: str, ip: str, parent: QWidget | None = None,
                  probe=None, source: tuple[str, str] = ("This computer", ""),
-                 live: bool = True) -> None:
+                 live: bool = True, port: int | None = DEFAULT_PORT) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowTitle(f"Net Path - {title}")
@@ -347,13 +364,30 @@ class NetPathWindow(QWidget):
         self.heading = _label(f"{title}", "netpathTitle")
         titles.addWidget(self.heading)
         name, address = source
-        self.route_text = _label(
-            f"Source: {name}{f' ({address})' if address else ''}   →   Destination: {ip}", "muted")
+        self.route_text = _label("", "muted")
         titles.addWidget(self.route_text)
         heading.addLayout(titles, 1)
         self.health = QLabel("Tracing…")
         self.health.setObjectName("netpathHealth")
         heading.addWidget(self.health)
+        heading.addSpacing(8)
+        heading.addWidget(QLabel("Probe"))
+        self.mode = QComboBox()
+        self.mode.addItems(["TCP", "ICMP"])
+        self.mode.setToolTip("TCP: a SYN to the service's port, like SolarWinds NetPath; it gets "
+                             "through firewalls that drop ping and follows the application's "
+                             "routes.\nICMP: ping, with each probe flow pinned to one route.")
+        self.mode.setCurrentIndex(0 if port is not None else 1)
+        heading.addWidget(self.mode)
+        self.port = QSpinBox()
+        self.port.setRange(1, 65535)
+        self.port.setValue(port or DEFAULT_PORT)
+        self.port.setToolTip("The TCP port the probes go to: the service's own, e.g. 443 for HTTPS")
+        self.port.setVisible(port is not None)
+        heading.addWidget(self.port)
+        self.mode.currentIndexChanged.connect(self._on_mode)
+        self.port.editingFinished.connect(self._on_port)
+        self._traced_port = self.probe_port()
         self.live = QCheckBox("Live")
         self.live.setChecked(live)
         self.live.setToolTip(f"Trace again every {LIVE_INTERVAL} seconds")
@@ -436,6 +470,7 @@ class NetPathWindow(QWidget):
                 border: 1px solid {self.colors['border']}; border-radius: 8px; }}
         """)
         self._set_health(None)
+        self._show_route()
         self.start()
 
     # -- tracing -------------------------------------------------------------
@@ -443,8 +478,9 @@ class NetPathWindow(QWidget):
     def start(self) -> None:
         if self._thread is not None:
             return
-        thread = NetPathThread(self._ip, self.live.isChecked(), self._probe)
+        thread = NetPathThread(self._ip, self.live.isChecked(), self._probe, self.probe_port())
         thread.sweep_ready.connect(self.add_sweep)
+        thread.failed.connect(self._on_failed)
         thread.progress.connect(lambda ttl: self.status.setText(f"Tracing {self._ip}: hop {ttl}…"))
         thread.name_ready.connect(self._on_name)
         thread.country_ready.connect(self._on_country)
@@ -452,6 +488,73 @@ class NetPathWindow(QWidget):
         self._thread = thread
         self.button.setEnabled(False)
         thread.start()
+
+    def probe_port(self) -> int | None:
+        """The TCP port probed, or None for ICMP."""
+        return self.port.value() if self.mode.currentIndex() == 0 else None
+
+    def probe_text(self) -> str:
+        port = self.probe_port()
+        return f"TCP SYN to port {port}" if port is not None else "ICMP echo (ping)"
+
+    def _show_route(self) -> None:
+        name, address = self._source
+        self.route_text.setText(f"Source: {name}{f' ({address})' if address else ''}   →   "
+                                f"Destination: {self._ip}   ·   {self.probe_text()}")
+
+    def _on_mode(self) -> None:
+        self.port.setVisible(self.mode.currentIndex() == 0)
+        self.restart()
+
+    def _on_port(self) -> None:
+        if self.probe_port() != self._traced_port:
+            self.restart()
+
+    def restart(self) -> None:
+        """Start over with the probes now chosen: their routes differ, so
+        the history starts again too."""
+        self._detach_thread()
+        self._traced_port = self.probe_port()
+        self.sweeps.clear()
+        self.graphs.clear()
+        self.everything = None
+        self.shown = -1
+        self._follow = True
+        self._fitted = False
+        self.history.healths = []
+        self.history.selected = -1
+        self.history.update()
+        self.history_text.setText("")
+        self.items = {}
+        self.edge_items = {}
+        self.graph = None
+        self.view.scene().clear()
+        self._set_rows("Path overview", [])
+        self._set_health(None)
+        self._show_route()
+        self.start()
+
+    def _on_failed(self, message: str) -> None:
+        """TCP probes can't be used here: fall back to ICMP, saying why."""
+        self.mode.blockSignals(True)
+        self.mode.setCurrentIndex(1)
+        self.mode.blockSignals(False)
+        self.port.setVisible(False)
+        self.restart()
+        self.status.setText(f"{message}. Using ICMP instead.")
+
+    def _detach_thread(self) -> None:
+        """Let the running trace finish on its own, its results unheard."""
+        thread, self._thread = self._thread, None
+        if thread is not None:
+            thread.stop()
+            for signal in (thread.sweep_ready, thread.progress, thread.name_ready,
+                           thread.country_ready, thread.failed, thread.finished):
+                signal.disconnect()
+            # Qt mustn't destroy a running QThread along with this window.
+            thread.setParent(QCoreApplication.instance())
+            thread.finished.connect(thread.deleteLater)
+        self.button.setEnabled(True)
 
     def _on_live(self, on: bool) -> None:
         if self._thread is not None:
@@ -727,6 +830,7 @@ class NetPathWindow(QWidget):
         rows = [
             ("Destination", f"{self._title}\n{self._ip}" if self._title != self._ip else self._ip),
             ("Reached", f"{graph.reached} of {graph.flows} probe flows"),
+            ("Probe", self.probe_text()),
             ("Hops", str(hops)),
             ("Routers", str(routers)),
             ("Branch points", str(splits) if splits else "None: a single route"),
@@ -805,15 +909,7 @@ class NetPathWindow(QWidget):
         self._show_details()
 
     def closeEvent(self, event) -> None:
-        thread, self._thread = self._thread, None
-        if thread is not None:
-            thread.stop()
-            for signal in (thread.sweep_ready, thread.progress, thread.name_ready,
-                           thread.country_ready, thread.finished):
-                signal.disconnect()
-            # Qt mustn't destroy a running QThread along with this window.
-            thread.setParent(QCoreApplication.instance())
-            thread.finished.connect(thread.deleteLater)
+        self._detach_thread()
         super().closeEvent(event)
 
 
