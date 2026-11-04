@@ -354,3 +354,35 @@ def test_the_window_boxes_providers_and_opens_a_box_on_double_click(qapp, monkey
     window.group_box.setChecked(False)
     assert set(GOOGLE) <= set(window.items)
     window.close()
+
+
+def test_double_clicking_a_box_on_screen_opens_it_without_crashing(qapp, monkeypatch):
+    """A real double-click, through the view: opening the box redraws the
+    scene and deletes the box clicked, which used to abort the program."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QApplication
+    from NetInfoView.ui import netpath_window as nw
+
+    monkeypatch.setattr(nw.NetPathWindow, "start", lambda self: None)
+    window = nw.NetPathWindow("dns.google", "8.8.8.8")
+    window.resize(1000, 600)
+    window.show()
+    window.add_sweep(_into_google())
+    for address, org in GOOGLE.items():
+        window._on_org(address, org)
+    window.refresh_view()
+    QApplication.processEvents()
+
+    def double_click(key):
+        item = window.items[key]
+        spot = window.view.mapFromScene(item.scenePos())
+        QTest.mouseDClick(window.view.viewport(), Qt.MouseButton.LeftButton, pos=spot)
+        for _ in range(3):
+            QApplication.processEvents()
+
+    double_click("group:GOOGLE:2")
+    assert "group:GOOGLE:2" not in window.items and set(GOOGLE) <= set(window.items)
+    double_click("142.0.0.1")  # a hop of the open box: folds it again
+    assert "group:GOOGLE:2" in window.items
+    window.close()

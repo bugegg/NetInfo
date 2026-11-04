@@ -196,8 +196,11 @@ class NodeItem(QGraphicsObject):
         self.setZValue(2)
 
     def mouseDoubleClickEvent(self, event) -> None:
-        self.activated.emit(self.key)
+        # Handled in full before telling anyone: what it sets off redraws
+        # the scene, deleting this item.
         super().mouseDoubleClickEvent(event)
+        event.accept()
+        self.activated.emit(self.key)
 
     def _shape_rect(self) -> QRectF:
         size = END_SIZE if self.kind != "router" else NODE_RADIUS * 2
@@ -776,7 +779,10 @@ class NetPathWindow(QWidget):
                 item = NodeItem(key, "router", ring, str(node.ttl), name or node.address,
                                 node.address if name else "", self.colors)
             item.setPos(positions[key])
-            item.activated.connect(self._activate)
+            # Later, not in the item's own event handler: redrawing deletes
+            # the item, and Qt would carry on with it once the handler returns.
+            item.activated.connect(
+                lambda key: QTimer.singleShot(0, lambda: self._activate(key)))
             scene.addItem(item)
             self.items[key] = item
         scene.setSceneRect(scene.itemsBoundingRect().adjusted(-40, -40, 40, 40))
