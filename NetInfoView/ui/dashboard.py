@@ -42,6 +42,7 @@ GRID_COLUMNS = {
     "mac_address": ("MAC address", 158),
     "vendor": ("Vendor", 180),
     "mtu": ("MTU", 56),
+    "total_sent": ("Total", 64),
     "succeed_count": ("Succeed", 76),
     "failed_count": ("Failed", 64),
     "last_rtt": ("Latency", 76),

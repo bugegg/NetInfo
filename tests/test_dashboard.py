@@ -144,10 +144,12 @@ def test_count_columns_have_short_titles(window):
         return window._proxy.headerData(column_index(key), Qt.Orientation.Horizontal,
                                         Qt.ItemDataRole.DisplayRole)
 
-    assert (title('succeed_count'), title('failed_count')) == ('Succeed', 'Failed')
+    assert (title('total_sent'), title('succeed_count'), title('failed_count')) == (
+        'Total', 'Succeed', 'Failed')
     button = next(b for b in window._dashboard.findChildren(QToolButton) if b.text() == 'Columns')
     names = [a.text() for a in button.menu().actions()]
     assert 'Succeed' in names and 'Failed' in names and 'Succeed Count' not in names
+    assert 'Total' in names and 'Total Sent Pings' not in names
 
 
 def test_open_ports_are_listed_one_per_line(window):
@@ -265,7 +267,7 @@ def test_default_column_order(window):
     titles = [window._proxy.headerData(i, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
               for i in shown]
     assert titles == ['Status', 'IP address', 'Hostname', 'DNS Name', 'MAC address', 'Vendor',
-                      'MTU', 'Succeed', 'Failed', 'Latency', 'Last Failed On']
+                      'MTU', 'Total', 'Succeed', 'Failed', 'Latency', 'Last Failed On']
 
 
 def test_sidebar_footer_shows_live_computer_name_and_ip(window, monkeypatch):
