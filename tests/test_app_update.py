@@ -45,15 +45,15 @@ def test_is_newer_compares_numerically_not_as_text():
 
 
 def test_parse_release_picks_this_macs_asset():
-    release = parse_release(RELEASE_JSON, machine="arm64")
+    release = parse_release(RELEASE_JSON, machine="arm64", windows=False)
     assert release.version == "1.2"
     assert release.asset_url == "https://x/arm.zip"
     assert release.notes == "What's new"
-    assert parse_release(RELEASE_JSON, machine="x86_64").asset_url == "https://x/intel.zip"
+    assert parse_release(RELEASE_JSON, machine="x86_64", windows=False).asset_url == "https://x/intel.zip"
 
 
 def test_parse_release_without_matching_asset_leaves_url_empty():
-    assert parse_release({"tag_name": "v1.2", "assets": []}, machine="arm64").asset_url == ""
+    assert parse_release({"tag_name": "v1.2", "assets": []}, machine="arm64", windows=False).asset_url == ""
 
 
 def test_parse_release_requires_a_tag():

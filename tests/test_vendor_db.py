@@ -1,3 +1,4 @@
+import sys
 import sqlite3
 import time
 
@@ -78,9 +79,12 @@ def test_data_persists_across_separate_connections(tmp_path):
         second.close()
 
 
-def test_default_db_path_is_under_application_support():
+def test_default_db_path_is_in_the_per_user_app_data_folder():
     from pinginfoview.fileio.vendor_db import default_db_path
     path = default_db_path()
-    assert "Application Support" in str(path)
+    if sys.platform == "win32":
+        assert "AppData" in str(path)
+    else:
+        assert "Application Support" in str(path)
     assert path.name == "vendor.sqlite"
     assert path.parent.name == "PingInfoView"

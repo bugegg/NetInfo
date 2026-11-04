@@ -254,3 +254,24 @@ def test_no_open_ports_returns_empty_string():
 
 def test_unrecognised_open_ports_return_empty_string():
     assert guess_device_type([12345, 54321]) == ""
+
+
+def test_tcp_self_connect_is_not_an_open_port(monkeypatch):
+    # Windows hands out ephemeral ports in order, so probing a free port on
+    # loopback can pick that same port as the local end and "connect" to
+    # itself. That must not count as something listening.
+    class SelfConnected:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def getsockname(self):
+            return ("127.0.0.1", 50001)
+
+        def getpeername(self):
+            return ("127.0.0.1", 50001)
+
+    monkeypatch.setattr(port_scan.socket, "create_connection", lambda *a, **k: SelfConnected())
+    assert port_scan._check_tcp_port("127.0.0.1", 50001) is False

@@ -149,8 +149,12 @@ def parse_ports(text: str) -> ParsedPorts:
 
 def _check_tcp_port(ip: str, port: int) -> bool:
     try:
-        with socket.create_connection((ip, port), timeout=CONNECT_TIMEOUT_SECONDS):
-            return True
+        with socket.create_connection((ip, port), timeout=CONNECT_TIMEOUT_SECONDS) as sock:
+            # A TCP "self-connect": when the OS happens to pick the target
+            # port as this socket's own local port (Windows hands out
+            # ephemeral ports sequentially, so it's easy to hit on
+            # loopback), the connect succeeds with nothing listening.
+            return sock.getsockname() != sock.getpeername()
     except OSError:
         return False
 
