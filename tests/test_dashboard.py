@@ -266,3 +266,18 @@ def test_default_column_order(window):
               for i in shown]
     assert titles == ['Status', 'IP address', 'Hostname', 'DNS Name', 'MAC address', 'Vendor',
                       'MTU', 'Succeed', 'Failed', 'Latency', 'Last Failed On']
+
+
+def test_sidebar_footer_shows_live_computer_name_and_ip(window, monkeypatch):
+    from NetInfoView.ui import dashboard
+    monkeypatch.setattr(dashboard.QSysInfo, "machineHostName", lambda: "office-pc.corp.example")
+    assert dashboard.computer_name() == "office-pc"
+    d = window._dashboard
+    monkeypatch.setattr(d, "_network_text", lambda: ("Local network", "10.0.0.5"))
+    d.refresh()
+    assert d.connection_state.text() == "Live"
+    assert d.connection_ip.text() == "10.0.0.5"
+    assert d.computer_name.text()
+    monkeypatch.setattr(d, "_network_text", lambda: ("No network", ""))
+    d.refresh()
+    assert d.connection_state.text() == "Not connected"
