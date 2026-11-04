@@ -6,21 +6,24 @@ models, table and history view), so every feature keeps working as before.
 """
 from __future__ import annotations
 
+import html
+import socket
 import time
 from datetime import datetime
 
-from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
+from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer
 from PyQt6.QtGui import (
     QAction, QColor, QFont, QFontDatabase, QFontInfo, QPainter, QPainterPath, QPen,
 )
 from PyQt6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QPushButton,
-    QSplitter, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget,
+    QScrollArea, QSplitter, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget,
     QToolButton, QVBoxLayout, QWidget,
 )
 
 from ..model.columns import COLUMNS
 from ..model.samples import nice_ceiling
+from ..ping.port_scan import STATIC_PORTS, STATIC_UDP_PORTS
 from ..settings import DisplayMode
 from . import glyphs
 
@@ -29,22 +32,73 @@ GREEN = "#16a34a"
 RED = "#e5383b"
 
 #: The device grid's default columns, in order, with shorter headers and
-#: starting widths. Hostname (width None) takes whatever room is left, so
-#: the grid fits the window without a horizontal scroll bar.
+#: starting widths. Hostname (width None) takes whatever room is left; in a
+#: window too narrow for them all, the grid scrolls sideways.
 GRID_COLUMNS = {
-    "last_status": ("Status", 120),
-    "ip_address": ("IP address", 140),
+    "last_status": ("Status", 96),
+    "ip_address": ("IP address", 120),
+    "mtu": ("MTU", 56),
     "hostname": ("Hostname", None),
-    "mac_address": ("MAC address", 170),
-    "last_rtt": ("Latency", 96),
+    "dns_name": ("DNS Name", 170),
+    "mac_address": ("MAC address", 140),
+    "vendor": ("Vendor", 120),
+    "succeed_count": ("Succeed", 76),
+    "failed_count": ("Failed", 64),
+    "last_rtt": ("Latency", 76),
+    "last_failed_on": ("Last Failed On", 150),
 }
 STRETCH_COLUMN = "hostname"
+#: Columns the grid never shows nor offers in its Columns menu. "Host Name"
+#: (what the user typed when adding the host) read as a duplicate of
+#: "Hostname" (the name found by DNS/NetBIOS/mDNS) and of "IP address".
+EXCLUDED_COLUMNS = {"host_name"}
+#: Shorter titles for optional columns, in the grid and its Columns menu.
+RENAMED_COLUMNS = {"succeed_count": "Succeed", "failed_count": "Failed"}
+#: Hostname never gets narrower than this when it fills the spare width.
+STRETCH_MIN_WIDTH = 180
 #: History view columns: time, host, IP, status, latency, TTL.
 HISTORY_TITLES = {0: "Time", 1: "Host", 2: "IP address", 3: "Status", 4: "Latency", 5: "TTL"}
 
 
 def column_index(key: str) -> int:
     return next(i for i, c in enumerate(COLUMNS) if c.key == key)
+
+
+def grid_title(column) -> str:
+    """What the grid and its Columns menu call `column`."""
+    if column.key in GRID_COLUMNS:
+        return GRID_COLUMNS[column.key][0]
+    return RENAMED_COLUMNS.get(column.key, column.title)
+
+
+def service_name(port: int | str) -> str:
+    """What usually listens on an open port as the grid lists it (443, or
+    "161/udp"): the scanner's own label, else the OS services database,
+    else ""."""
+    number, _, proto = str(port).partition("/")
+    proto = proto or "tcp"
+    try:
+        number = int(number)
+    except ValueError:
+        return ""
+    known = (STATIC_UDP_PORTS if proto == "udp" else STATIC_PORTS).get(number)
+    if known:
+        return known
+    try:
+        return socket.getservbyport(number, proto).upper()
+    except (OSError, OverflowError):
+        return ""
+
+
+def open_ports_html(ports) -> str:
+    """Open ports one per line, each after its service name, in two aligned
+    columns."""
+    rows = "".join(
+        f"<tr><td style='padding-right:14px'>{html.escape(service_name(p) or '—')}</td>"
+        f"<td>{html.escape(str(p))}</td></tr>"
+        for p in ports
+    )
+    return f"<table cellspacing='0' cellpadding='0'>{rows}</table>"
 
 
 def label(text: str = "", name: str = "") -> QLabel:
@@ -81,15 +135,15 @@ def draw_badge(painter: QPainter, rect: QRectF, text: str, bg: str, fg: str) -> 
     font = QFont(painter.font())
     font.setWeight(QFont.Weight.DemiBold)
     painter.setFont(font)
-    width = painter.fontMetrics().horizontalAdvance(text) + 34
-    pill = QRectF(rect.left(), rect.center().y() - 11, width, 22)
+    width = painter.fontMetrics().horizontalAdvance(text) + 28
+    pill = QRectF(rect.left(), rect.center().y() - 9, width, 18)
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QColor(bg))
-    painter.drawRoundedRect(pill, 11, 11)
+    painter.drawRoundedRect(pill, 9, 9)
     painter.setBrush(QColor(fg))
-    painter.drawEllipse(QPointF(pill.left() + 13, pill.center().y()), 3.5, 3.5)
+    painter.drawEllipse(QPointF(pill.left() + 10, pill.center().y()), 3, 3)
     painter.setPen(QColor(fg))
-    painter.drawText(pill.adjusted(22, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, text)
+    painter.drawText(pill.adjusted(18, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, text)
     painter.restore()
 
 
@@ -163,8 +217,8 @@ class MenuButton(QToolButton):
         if self.objectName() == "navButton":
             return
         painter = QPainter(self)
-        chevron = glyphs.pixmap("chevron", self.chevron_color, 14)
-        painter.drawPixmap(self.width() - 26, (self.height() - 14) // 2, chevron)
+        chevron = glyphs.pixmap("chevron", self.chevron_color, 12)
+        painter.drawPixmap(self.width() - 22, (self.height() - 12) // 2, chevron)
         painter.end()
 
 
@@ -194,7 +248,7 @@ class LatencyChart(QWidget):
     def __init__(self, window):
         super().__init__()
         self.window = window
-        self.setMinimumSize(240, 140)
+        self.setMinimumSize(220, 120)
 
     def paintEvent(self, event):
         colors = theme_colors(self.window.settings.dark_background)
@@ -205,17 +259,17 @@ class LatencyChart(QWidget):
         title.setWeight(QFont.Weight.DemiBold)
         painter.setFont(title)
         painter.setPen(ink)
-        painter.drawText(QRectF(16, 10, 200, 22), Qt.AlignmentFlag.AlignVCenter, "Latency (ms)")
+        painter.drawText(QRectF(12, 6, 200, 20), Qt.AlignmentFlag.AlignVCenter, "Latency (ms)")
         painter.setFont(self.font())
         painter.setPen(muted)
-        painter.drawText(QRectF(0, 10, self.width() - 16, 22),
+        painter.drawText(QRectF(0, 6, self.width() - 12, 20),
                          Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "Last 60 seconds")
 
         selected = self.window._selected_entries()
         end = self.window._stopped_at or time.time()
         start = end - self.WINDOW_SECONDS
         samples = self.window._samples.samples(selected[0].key, start) if len(selected) == 1 else []
-        plot = QRectF(52, 42, max(1, self.width() - 80), max(1, self.height() - 72))
+        plot = QRectF(44, 34, max(1, self.width() - 80), max(1, self.height() - 58))
         ceiling = nice_ceiling(max((s.rtt_ms or 0 for s in samples), default=10) * 1.15)
         steps = y_steps(ceiling)
         for i in range(steps + 1):
@@ -303,8 +357,8 @@ class Dashboard(QWidget):
         body = QWidget()
         body.setObjectName("body")
         layout = QVBoxLayout(body)
-        layout.setContentsMargins(20, 16, 20, 10)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 12, 16, 8)
+        layout.setSpacing(10)
         layout.addLayout(self._build_heading())
         layout.addWidget(self._build_summary())
         layout.addLayout(self._build_filters())
@@ -362,43 +416,46 @@ class Dashboard(QWidget):
         w = self.window
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(212)
+        sidebar.setFixedWidth(180)
         nav = QVBoxLayout(sidebar)
-        nav.setContentsMargins(12, 16, 12, 12)
-        nav.setSpacing(4)
+        nav.setContentsMargins(10, 12, 10, 10)
+        nav.setSpacing(2)
 
         brand = QHBoxLayout()
-        brand.setSpacing(7)
+        brand.setSpacing(8)
         logo = QLabel()
-        logo.setPixmap(glyphs.pixmap("brand", BLUE, 16))
+        logo.setPixmap(glyphs.pixmap("brand", BLUE, 22))
         brand.addWidget(logo)
         brand.addWidget(label("NetInfoView", "brand"))
         brand.addStretch()
         nav.addLayout(brand)
-        nav.addSpacing(18)
+        nav.addSpacing(12)
 
         self.nav_overview = self._tool_button("Network overview", "overview", "navSelected")
         self._icon_targets[-1] = (self.nav_overview, "overview", True)
         self.nav_overview.clicked.connect(lambda: w._table.setFocus())
         nav.addWidget(self.nav_overview)
-        nav.addWidget(self._menu_button("Devices", "devices", (
-            w.action_add, w.action_remove, w.action_clear_all, None,
-            w.action_enable, w.action_disable, w.action_clear_stats, None,
-            w.action_load, w.action_save_hosts, w.action_copy, w.action_properties,
-        ), "navButton"))
+        # Devices opens Add Hosts straight away; removing, enabling, loading
+        # and the rest are on the grid's right-click menu.
+        self.nav_devices = self._tool_button("Devices", "devices", "navButton", w.action_add)
+        nav.addWidget(self.nav_devices)
         nav.addWidget(self._tool_button("Ping monitor", "ping", "navButton", w.action_graph))
-        nav.addWidget(self._menu_button("Discovery", "discovery", (
-            w.action_check_mtu, w.action_trace_mtu, w.action_lldp_cdp, None,
-            w.action_update_vendor_db,
-        ), "navButton"))
-        nav.addWidget(self._menu_button("Settings", "settings", (
-            w.action_options, None, w.action_dark, w.action_odd_even, w.action_always_on_top,
-            w.action_font, w.action_autosize, None, w.action_show_history,
-            w.action_auto_scroll, w.action_clear_history, None, w.action_about,
-        ), "navButton"))
+        # Discovery opens the LLDP/CDP window straight away. Trace Path MTU is
+        # on the grid's right-click menu; MTU is checked automatically.
+        self.nav_discovery = self._tool_button("Discovery", "discovery", "navButton",
+                                               w.action_lldp_cdp)
+        nav.addWidget(self.nav_discovery)
+        # Settings opens Options straight away; the view toggles (dark
+        # background, font, lower pane, ...) stay on the grid's right-click menu.
+        self.nav_settings = self._tool_button("Settings", "settings", "navButton", w.action_options)
+        nav.addWidget(self.nav_settings)
         nav.addStretch()
-        nav.addWidget(self._tool_button("Check for updates", "update", "navButton",
-                                        w.action_check_updates))
+        # Both kinds of update in one place: the app itself, and the MAC
+        # vendor list it names devices with.
+        self.nav_updates = self._menu_button("Check for updates", "update", (
+            w.action_check_updates, w.action_update_vendor_db,
+        ), "navButton")
+        nav.addWidget(self.nav_updates)
 
         line = QFrame()
         line.setObjectName("rule")
@@ -407,7 +464,7 @@ class Dashboard(QWidget):
         nav.addWidget(line)
         nav.addSpacing(8)
         footer = QGridLayout()
-        footer.setContentsMargins(8, 0, 4, 0)
+        footer.setContentsMargins(6, 0, 4, 0)
         footer.setHorizontalSpacing(10)
         footer.setVerticalSpacing(2)
         self.connection_dot = label("●", "dotOnline")
@@ -445,7 +502,7 @@ class Dashboard(QWidget):
         summary = QFrame()
         summary.setObjectName("card")
         row = QHBoxLayout(summary)
-        row.setContentsMargins(24, 12, 24, 12)
+        row.setContentsMargins(16, 8, 16, 8)
         row.setSpacing(0)
         self.stats = []
         for i, (name, mark) in enumerate((("devices", "devices"), ("online", GREEN),
@@ -456,12 +513,12 @@ class Dashboard(QWidget):
                 rule.setFixedWidth(1)
                 row.addWidget(rule)
             cell = QHBoxLayout()
-            cell.setSpacing(10)
+            cell.setSpacing(7)
             cell.addStretch()
             marker = QLabel()
             if mark.startswith("#"):
                 marker.setText("●")
-                marker.setStyleSheet(f"color: {mark}; font-size: 16px;")
+                marker.setStyleSheet(f"color: {mark}; font-size: 12px;")
             else:
                 self._icon(marker, mark)
             cell.addWidget(marker)
@@ -476,12 +533,12 @@ class Dashboard(QWidget):
     def _build_filters(self) -> QHBoxLayout:
         w = self.window
         filters = QHBoxLayout()
-        filters.setSpacing(10)
+        filters.setSpacing(8)
         self.search = QLineEdit()
         self.search.setObjectName("search")
         self.search.setPlaceholderText("Search by hostname, IP or MAC")
         self.search.setClearButtonEnabled(True)
-        self.search.setMinimumWidth(240)
+        self.search.setMinimumWidth(200)
         self.search.textChanged.connect(self.search_changed)
         self._search_action = self.search.addAction(glyphs.icon("search", "#888"),
                                                     QLineEdit.ActionPosition.LeadingPosition)
@@ -490,7 +547,7 @@ class Dashboard(QWidget):
         segment = QFrame()
         segment.setObjectName("segment")
         seg = QHBoxLayout(segment)
-        seg.setContentsMargins(3, 3, 3, 3)
+        seg.setContentsMargins(2, 2, 2, 2)
         seg.setSpacing(2)
         self.filter_buttons = {}
         for mode, text in ((DisplayMode.ALL, "All"), (DisplayMode.SUCCEEDED, "Online"),
@@ -498,7 +555,7 @@ class Dashboard(QWidget):
             button = QPushButton(text)
             button.setObjectName("segmentButton")
             button.setCheckable(True)
-            button.setMinimumWidth(64)
+            button.setMinimumWidth(54)
             button.clicked.connect(lambda checked, m=mode: w._set_display_mode(m))
             self.filter_buttons[mode] = button
             seg.addWidget(button)
@@ -508,9 +565,11 @@ class Dashboard(QWidget):
         columns = self._menu_button("Columns", "columns", (), "large")
         menu = columns.menu()
         for index, column in enumerate(COLUMNS):
-            action = QAction(column.title, menu, checkable=True)
+            if column.key in EXCLUDED_COLUMNS:
+                continue
+            action = QAction(grid_title(column), menu, checkable=True)
             action.setChecked(column.key in GRID_COLUMNS)
-            action.toggled.connect(lambda checked, i=index: w._table.setColumnHidden(i, not checked))
+            action.toggled.connect(lambda checked, i=index: self.set_column_visible(i, checked))
             menu.addAction(action)
         filters.addWidget(columns)
         return filters
@@ -524,12 +583,20 @@ class Dashboard(QWidget):
             header.moveSection(header.visualIndex(index), position)
         for index, column in enumerate(COLUMNS):
             table.setColumnHidden(index, column.key not in GRID_COLUMNS)
-        w._proxy.header_titles = {column_index(k): t for k, (t, _) in GRID_COLUMNS.items()}
+        w._proxy.header_titles = {i: grid_title(c) for i, c in enumerate(COLUMNS)
+                                  if grid_title(c) != c.title}
         for key, (_, width) in GRID_COLUMNS.items():
             if width is not None:
                 table.setColumnWidth(column_index(key), width)
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(column_index(STRETCH_COLUMN), QHeaderView.ResizeMode.Stretch)
+        # Hostname fills the spare width, but stays Interactive (a Stretch
+        # column can't be dragged, and is squeezed to nothing once the
+        # Columns menu adds more than fit). Once dragged, it's left alone.
+        self._stretch_user_sized = False
+        self._fitting = False
+        header.sectionResized.connect(self._on_section_resized)
+        table.viewport().installEventFilter(self)
+        self.fit_stretch_column()
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         table.setItemDelegateForColumn(column_index("last_status"), StatusDelegate(table))
         table.setItemDelegateForColumn(column_index("last_rtt"), TextDelegate(table, " ms"))
@@ -539,16 +606,50 @@ class Dashboard(QWidget):
         table.setFrameShape(QFrame.Shape.NoFrame)
         table.setObjectName("grid")
 
+    def set_column_visible(self, index: int, visible: bool) -> None:
+        self.window._table.setColumnHidden(index, not visible)
+        self.fit_stretch_column()
+
+    def fit_stretch_column(self) -> None:
+        """Widen Hostname to fill whatever the other visible columns leave,
+        unless the user has sized it by hand."""
+        if self._stretch_user_sized:
+            return
+        table = self.window._table
+        header = table.horizontalHeader()
+        stretch = column_index(STRETCH_COLUMN)
+        others = sum(header.sectionSize(i) for i in range(header.count())
+                     if i != stretch and not header.isSectionHidden(i))
+        width = max(STRETCH_MIN_WIDTH, table.viewport().width() - others)
+        self._fitting = True
+        try:
+            header.resizeSection(stretch, width)
+        finally:
+            self._fitting = False
+
+    def _on_section_resized(self, index: int, old: int, new: int) -> None:
+        if self._fitting:
+            return
+        if index == column_index(STRETCH_COLUMN):
+            self._stretch_user_sized = True  # dragged by hand: keep it
+        else:
+            self.fit_stretch_column()
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Resize and obj is self.window._table.viewport():
+            self.fit_stretch_column()
+        return super().eventFilter(obj, event)
+
     def _build_inspector(self) -> None:
         w = self.window
         self.inspector = QWidget()
         self.inspector.setObjectName("inspector")
         layout = QVBoxLayout(self.inspector)
-        layout.setContentsMargins(0, 10, 0, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(6)
 
         head = QHBoxLayout()
-        head.setSpacing(12)
+        head.setSpacing(8)
         self.selection_icon = QLabel()
         self._icon(self.selection_icon, "devices")
         head.addWidget(self.selection_icon)
@@ -556,7 +657,7 @@ class Dashboard(QWidget):
         head.addWidget(self.selection_title)
         self.selection_rule = QFrame()
         self.selection_rule.setObjectName("vrule")
-        self.selection_rule.setFixedSize(1, 20)
+        self.selection_rule.setFixedSize(1, 16)
         head.addWidget(self.selection_rule)
         self.selection_ip = label("", "selectionIp")
         head.addWidget(self.selection_ip)
@@ -569,7 +670,7 @@ class Dashboard(QWidget):
         self.tabs.tabBar().setDrawBase(False)
         self.overview = QWidget()
         grid = QGridLayout(self.overview)
-        grid.setContentsMargins(16, 12, 16, 12)
+        grid.setContentsMargins(12, 10, 12, 10)
         grid.setHorizontalSpacing(28)
         grid.setVerticalSpacing(10)
         self.overview_fields = {}
@@ -582,11 +683,27 @@ class Dashboard(QWidget):
             box.addWidget(label(name, "fieldName"))
             value = label("—", "fieldValue")
             value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            # Long values (a list of open ports, a vendor's full name) wrap
+            # within their column instead of widening it.
+            value.setWordWrap(True)
+            value.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
             self.overview_fields[name] = value
+            if name == "Open ports":
+                value.setTextFormat(Qt.TextFormat.RichText)
             box.addWidget(value)
+            box.addStretch()
             grid.addLayout(box, r, c)
+        for c in range(4):
+            grid.setColumnStretch(c, 1)  # four equal columns
         grid.setRowStretch(3, 1)
-        self.tabs.addTab(self.overview, "Overview")
+        # A host with many open ports (one per line) can outgrow the pane.
+        scroll = QScrollArea()
+        scroll.setObjectName("overviewScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(self.overview)
+        self.tabs.addTab(scroll, "Overview")
 
         history = QSplitter(Qt.Orientation.Horizontal)
         history.setChildrenCollapsible(False)
@@ -606,7 +723,7 @@ class Dashboard(QWidget):
         hv.setItemDelegateForColumn(3, HistoryStatusDelegate(hv))
         hv.setItemDelegateForColumn(4, TextDelegate(hv, " ms"))
         hv.setItemDelegateForColumn(5, TextDelegate(hv))
-        for index, width in ((0, 88), (1, 140), (2, 120), (3, 122), (4, 80), (5, 44)):
+        for index, width in ((0, 76), (1, 120), (2, 104), (3, 104), (4, 70), (5, 40)):
             hv.setColumnWidth(index, width)
         table_card = QFrame()
         table_card.setObjectName("card")
@@ -636,9 +753,9 @@ class Dashboard(QWidget):
             if widget.objectName() in ("primary", "danger"):
                 color = "#ffffff"
             if isinstance(widget, QLabel):
-                widget.setPixmap(glyphs.pixmap(name, color, 20))
+                widget.setPixmap(glyphs.pixmap(name, color, 16))
                 continue
-            size, pad = (20, 12) if widget.objectName() in ("navButton", "navSelected") else (16, 6)
+            size, pad = (16, 8) if widget.objectName() in ("navButton", "navSelected") else (14, 5)
             widget.setIcon(glyphs.icon(name, color, size, pad))
             widget.setIconSize(QSize(size + pad, size))
             if isinstance(widget, MenuButton):
@@ -723,7 +840,7 @@ class Dashboard(QWidget):
         text, bg, fg = status_badge(e)
         self.selection_badge.setText(f"●  {text}")
         self.selection_badge.setStyleSheet(
-            f"background: {bg}; color: {fg}; border-radius: 11px; padding: 3px 12px; font-weight: 600;")
+            f"background: {bg}; color: {fg}; border-radius: 9px; padding: 2px 9px; font-weight: 600;")
         latency = "—" if e.last_rtt_ms is None else f"{e.last_rtt_ms:g} ms"
         exact = e.last_status.value if e.last_status else "Not pinged yet"
         fields = {
@@ -732,7 +849,7 @@ class Dashboard(QWidget):
             "Hostname": e.hostname or "—", "MAC address": e.mac_address or "—",
             "Vendor": e.vendor or "—", "Device type": e.device_type_guess or "—",
             "MTU": str(e.mtu) if e.mtu else "—",
-            "Open ports": ", ".join(map(str, e.open_ports)) or "—", "DNS name": e.dns_name or "—",
+            "Open ports": open_ports_html(e.open_ports) if e.open_ports else "—", "DNS name": e.dns_name or "—",
         }
         for name, value in fields.items():
             self.overview_fields[name].setText(value)
@@ -757,83 +874,84 @@ def apply_theme(window) -> None:
     c = theme_colors(window.settings.dark_background)
     window.setStyleSheet(f"""
         QMainWindow {{ background: {c['bg']}; }}
-        QWidget {{ color: {c['ink']}; font-size: 13px; }}
+        QWidget {{ color: {c['ink']}; font-size: 12px; }}
         QWidget#body, QWidget#inspector, QSplitter {{ background: {c['bg']}; }}
+        QScrollArea#overviewScroll, QScrollArea#overviewScroll > QWidget > QWidget {{ background: {c['bg']}; }}
         QDialog, QMenu {{ background: {c['surface']}; }}
         QMenu {{ border: 1px solid {c['border']}; padding: 4px; }}
-        QMenu::item {{ padding: 6px 22px 6px 22px; border-radius: 4px; }}
+        QMenu::item {{ padding: 5px 18px 5px 18px; border-radius: 4px; }}
         QMenu::item:selected {{ background: {c['select']}; color: {c['selected_ink']}; }}
         QMenu::separator {{ height: 1px; background: {c['border']}; margin: 4px 8px; }}
         QLabel {{ background: transparent; }}
         QFrame#sidebar {{ background: {c['sidebar']}; border-right: 1px solid {c['border']}; }}
         QFrame#rule, QFrame#vrule {{ background: {c['border']}; }}
-        QLabel#brand {{ font-size: 17px; font-weight: 700; }}
-        QLabel#title {{ font-size: 24px; font-weight: 700; }}
-        QLabel#subtitle {{ color: {c['muted']}; font-size: 13px; }}
+        QLabel#brand {{ font-size: 15px; font-weight: 700; }}
+        QLabel#title {{ font-size: 19px; font-weight: 700; }}
+        QLabel#subtitle {{ color: {c['muted']}; font-size: 12px; }}
         QLabel#muted, QLabel#fieldName {{ color: {c['muted']}; }}
         QLabel#strong {{ font-weight: 600; }}
-        QLabel#fieldValue {{ font-size: 14px; }}
-        QLabel#dotOnline {{ color: {GREEN}; font-size: 14px; }}
-        QLabel#dotOffline {{ color: {RED}; font-size: 14px; }}
-        QLabel#stat {{ font-size: 20px; font-weight: 700; }}
-        QLabel#statCaption {{ color: {c['muted']}; font-size: 14px; }}
-        QLabel#selectionTitle {{ font-size: 16px; font-weight: 700; }}
-        QLabel#selectionIp {{ color: {c['muted']}; font-size: 14px; }}
-        QLabel#details {{ padding: 16px; background: {c['surface']}; }}
-        QFrame#card {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 10px; }}
+        QLabel#fieldValue {{ font-size: 12px; }}
+        QLabel#dotOnline {{ color: {GREEN}; font-size: 11px; }}
+        QLabel#dotOffline {{ color: {RED}; font-size: 11px; }}
+        QLabel#stat {{ font-size: 16px; font-weight: 700; }}
+        QLabel#statCaption {{ color: {c['muted']}; font-size: 12px; }}
+        QLabel#selectionTitle {{ font-size: 14px; font-weight: 700; }}
+        QLabel#selectionIp {{ color: {c['muted']}; font-size: 12px; }}
+        QLabel#details {{ padding: 12px; background: {c['surface']}; }}
+        QFrame#card {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 8px; }}
         QToolButton, QPushButton {{ background: {c['surface']}; border: 1px solid {c['border']};
-            border-radius: 8px; padding: 7px 12px; }}
-        QToolButton#large {{ padding: 7px 30px 7px 12px; font-size: 13px; }}
+            border-radius: 6px; padding: 5px 9px; }}
+        QToolButton#large {{ padding: 5px 26px 5px 9px; font-size: 12px; }}
         QToolButton:hover, QPushButton:hover {{ background: {c['hover']}; }}
         QToolButton::menu-indicator {{ image: none; width: 0; }}
         QToolButton:disabled, QPushButton:disabled {{ color: {c['muted']}; }}
         QToolButton#primary, QToolButton#danger {{ background: {BLUE}; color: white; border: none;
-            font-size: 14px; font-weight: 600; padding: 8px 18px; }}
+            font-size: 12px; font-weight: 600; padding: 6px 14px; }}
         QToolButton#primary:hover {{ background: #006ee6; }}
         QToolButton#primary:disabled {{ background: {c['border']}; color: {c['muted']}; }}
         QToolButton#danger {{ background: {RED}; }}
         QToolButton#navButton, QToolButton#navSelected {{ border: none; background: transparent;
-            text-align: left; padding: 8px 10px; font-size: 14px; min-width: 164px; }}
-        QToolButton#navButton:hover {{ background: {c['hover']}; border-radius: 8px; }}
+            text-align: left; padding: 6px 8px; font-size: 12px; min-width: 140px; }}
+        QToolButton#navButton:hover {{ background: {c['hover']}; border-radius: 6px; }}
         QToolButton#navSelected {{ background: {c['nav']}; color: {c['nav_ink']}; font-weight: 600;
-            border-radius: 8px; }}
-        QFrame#segment {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 9px; }}
-        QPushButton#segmentButton {{ border: none; background: transparent; font-size: 13px;
-            padding: 5px 12px; border-radius: 7px; }}
+            border-radius: 6px; }}
+        QFrame#segment {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 7px; }}
+        QPushButton#segmentButton {{ border: none; background: transparent; font-size: 12px;
+            padding: 3px 10px; border-radius: 5px; }}
         QPushButton#segmentButton:hover {{ background: {c['hover']}; }}
         QPushButton#segmentButton:checked {{ background: {BLUE}; color: white; }}
-        QLineEdit#search {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 8px;
-            padding: 7px 8px 7px 4px; font-size: 13px; color: {c['ink']};
+        QLineEdit#search {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 6px;
+            padding: 5px 6px 5px 2px; font-size: 12px; color: {c['ink']};
             selection-background-color: {BLUE}; }}
         QLineEdit#search:focus {{ border-color: {BLUE}; }}
         QTableView {{ background: {c['surface']}; color: {c['ink']}; border: 1px solid {c['border']};
-            border-radius: 10px; selection-background-color: {c['select']};
-            selection-color: {c['selected_ink']}; outline: 0; font-size: 13px; }}
-        QTableView#historyGrid {{ border: none; font-size: 13px; }}
-        QTableView::item {{ padding: 0 10px; border-bottom: 1px solid {c['border']}; }}
+            border-radius: 8px; selection-background-color: {c['select']};
+            selection-color: {c['selected_ink']}; outline: 0; font-size: 12px; }}
+        QTableView#historyGrid {{ border: none; font-size: 12px; }}
+        QTableView::item {{ padding: 0 8px; border-bottom: 1px solid {c['border']}; }}
         QHeaderView::section {{ background: {c['surface']}; color: {c['ink']}; border: none;
             border-bottom: 1px solid {c['border']}; border-right: 1px solid {c['border']};
-            padding: 6px 10px; }}
+            padding: 4px 8px; }}
         QTableCornerButton::section {{ background: {c['surface']}; border: none; }}
-        QTabWidget::pane {{ border: none; background: {c['bg']}; padding-top: 8px; }}
+        QTabWidget::pane {{ border: none; background: {c['bg']}; padding-top: 6px; }}
         QTabWidget::tab-bar {{ left: 0; }}
         QTabBar {{ background: transparent; }}
-        QTabBar::tab {{ padding: 5px 16px; margin-right: 8px; border: none; border-radius: 7px;
-            background: transparent; color: {c['ink']}; font-size: 13px; }}
+        QTabBar::tab {{ padding: 3px 12px; margin-right: 6px; border: none; border-radius: 5px;
+            background: transparent; color: {c['ink']}; font-size: 12px; }}
         QTabBar::tab:hover {{ background: {c['hover']}; }}
         QTabBar::tab:selected {{ background: {BLUE}; color: white; }}
         QSplitter::handle {{ background: {c['bg']}; }}
         QSplitter::handle:vertical {{ height: 6px; }}
-        QSplitter::handle:horizontal {{ width: 14px; }}
+        QSplitter::handle:horizontal {{ width: 10px; }}
         QStatusBar {{ padding-left: 12px; background: {c['bg']}; color: {c['muted']}; border-top: 1px solid {c['border']}; }}
         QStatusBar QLabel {{ color: {c['muted']}; padding-right: 12px; }}
-        QScrollBar:vertical {{ width: 10px; background: transparent; }}
+        QScrollBar:vertical {{ width: 8px; background: transparent; }}
         QScrollBar::handle:vertical {{ background: {c['border']}; border-radius: 4px; min-height: 30px; }}
         QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
     """)
     for table in (window._table, window._history_view):
         table.setShowGrid(False)
-        table.verticalHeader().setDefaultSectionSize(30)
-        table.horizontalHeader().setMinimumHeight(32)
+        table.verticalHeader().setDefaultSectionSize(24)
+        table.horizontalHeader().setMinimumHeight(26)
     if hasattr(window, "_dashboard"):
         window._dashboard.apply_icons()

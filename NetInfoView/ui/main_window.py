@@ -371,34 +371,24 @@ class MainWindow(QMainWindow):
         self._table.addAction(separator)
 
     def _build_context_menu(self) -> None:
-        """Everything that used to live in the top menu bar, and then in the
-        toolbar's dropdown, ends up here instead: the table's own right-click
-        menu. Options, Update MAC Vendor Database and Check for Updates are
-        in the sidebar (ui/dashboard.py) instead, so they aren't duplicated
-        here.
+        """The table's right-click menu: what acts on the selected hosts.
+        Adding hosts, filtering, exporting and settings live in the sidebar
+        and header (ui/dashboard.py), Check LLDP/CDP behind the sidebar's
+        Discovery button, and MTU is checked automatically; Enable/Disable, Clear Statistics, Mark Odd/Even Rows, Always
+        On Top, Choose Font and the Lower Pane options were dropped
+        from the menu (their actions, and any shortcuts, still exist).
         """
-        self._table.addAction(self.action_copy)
         self._table.addAction(self.action_properties)
         self._table.addAction(self.action_graph)
-        self._table.addAction(self.action_check_mtu)
         self._table.addAction(self.action_trace_mtu)
-        self._table.addAction(self.action_lldp_cdp)
         self._add_table_separator()
 
-        self._table.addAction(self.action_add)
         self._table.addAction(self.action_remove)
+        self._table.addAction(self.action_clear_all)
         self._add_table_separator()
 
-        self._table.addAction(self.action_enable)
-        self._table.addAction(self.action_disable)
-        self._table.addAction(self.action_clear_stats)
-        self._add_table_separator()
-
-        self._table.addAction(self.action_load)
-        self._table.addAction(self.action_save_hosts)
-        self._table.addAction(self.action_export)
-        self._add_table_separator()
-
+        # Not on the menu any more (the All/Online/Offline buttons replace
+        # them), but _set_display_mode keeps their checks in step.
         display_group = QActionGroup(self)
         self._display_actions: dict[DisplayMode, QAction] = {}
         for mode, title in (
@@ -411,20 +401,11 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda _, m=mode: self._set_display_mode(m))
             display_group.addAction(action)
             self._display_actions[mode] = action
-            self._table.addAction(action)
-        self._add_table_separator()
-        self._table.addAction(self.action_hide_disabled)
-        self._table.addAction(self.action_odd_even)
+
         self._table.addAction(self.action_dark)
-        self._table.addAction(self.action_always_on_top)
         self._add_table_separator()
         self._table.addAction(self.action_autosize)
-        self._table.addAction(self.action_font)
 
-        lower = QMenu("Lower &Pane", self)
-        lower.addAction(self.action_show_history)
-        lower.addAction(self.action_auto_scroll)
-        lower.addSeparator()
         history_group = QActionGroup(self)
         for mode, title in (
             (HistoryMode.ALL, "Record &Every Ping"),
@@ -435,10 +416,6 @@ class MainWindow(QMainWindow):
             action.setChecked(self.settings.history_mode is mode)
             action.triggered.connect(lambda _, m=mode: self._set_history_mode(m))
             history_group.addAction(action)
-            lower.addAction(action)
-        lower.addSeparator()
-        lower.addAction(self.action_clear_history)
-        self._table.addAction(lower.menuAction())
 
         self._add_table_separator()
         self._table.addAction(self.action_about)
@@ -1009,8 +986,8 @@ class MainWindow(QMainWindow):
     def _apply_font(self, font: QFont) -> None:
         self._table.setFont(font)
         self._history_view.setFont(font)
-        self._table.verticalHeader().setDefaultSectionSize(max(34, font.pointSize() + 18))
-        self._history_view.verticalHeader().setDefaultSectionSize(max(34, font.pointSize() + 18))
+        self._table.verticalHeader().setDefaultSectionSize(max(24, font.pointSize() + 12))
+        self._history_view.verticalHeader().setDefaultSectionSize(max(24, font.pointSize() + 12))
 
     def choose_font(self) -> None:
         font, ok = QFontDialog.getFont(self._table.font(), self, "Choose Font")

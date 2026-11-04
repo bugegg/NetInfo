@@ -561,11 +561,10 @@ def test_check_for_updates_has_a_sidebar_button(window):
     ]
     assert len(buttons) == 1
     assert not buttons[0].icon().isNull()
-    triggered = []
-    window.action_check_updates.triggered.disconnect()
-    window.action_check_updates.triggered.connect(lambda: triggered.append(True))
-    buttons[0].click()
-    assert triggered == [True]
+    # Its menu holds both updates: the app, and the MAC vendor database.
+    assert buttons[0].menu().actions() == [
+        window.action_check_updates, window.action_update_vendor_db,
+    ]
     assert window.action_check_updates not in window._table.actions()
 
 
