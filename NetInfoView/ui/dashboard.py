@@ -13,7 +13,7 @@ from datetime import datetime
 
 from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer
 from PyQt6.QtGui import (
-    QAction, QColor, QFont, QFontDatabase, QFontInfo, QPainter, QPainterPath, QPen,
+    QAction, QColor, QFont, QFontInfo, QPainter, QPainterPath, QPen,
 )
 from PyQt6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QPushButton,
@@ -25,7 +25,7 @@ from ..model.columns import COLUMNS
 from ..model.samples import nice_ceiling
 from ..ping.port_scan import STATIC_PORTS, STATIC_UDP_PORTS
 from ..settings import DisplayMode
-from . import glyphs
+from . import fonts, glyphs
 
 BLUE = "#087dff"
 GREEN = "#16a34a"
@@ -36,12 +36,12 @@ RED = "#e5383b"
 #: window too narrow for them all, the grid scrolls sideways.
 GRID_COLUMNS = {
     "last_status": ("Status", 96),
-    "ip_address": ("IP address", 120),
-    "mtu": ("MTU", 56),
+    "ip_address": ("IP address", 128),
     "hostname": ("Hostname", None),
     "dns_name": ("DNS Name", 170),
-    "mac_address": ("MAC address", 140),
-    "vendor": ("Vendor", 120),
+    "mac_address": ("MAC address", 158),
+    "vendor": ("Vendor", 180),
+    "mtu": ("MTU", 56),
     "succeed_count": ("Succeed", 76),
     "failed_count": ("Failed", 64),
     "last_rtt": ("Latency", 76),
@@ -191,9 +191,9 @@ class TextDelegate(QStyledItemDelegate):
         else:
             option.text = "—"
         if self.mono:
-            font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-            font.setPixelSize(QFontInfo(option.font).pixelSize())
-            option.font = font
+            size = QFont(option.font)
+            size.setPixelSize(QFontInfo(option.font).pixelSize())
+            option.font = fonts.mono(size)
 
 
 class TimeDelegate(TextDelegate):
@@ -703,7 +703,6 @@ class Dashboard(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(self.overview)
-        self.tabs.addTab(scroll, "Overview")
 
         history = QSplitter(Qt.Orientation.Horizontal)
         history.setChildrenCollapsible(False)
@@ -734,14 +733,11 @@ class Dashboard(QWidget):
         history.setStretchFactor(0, 1)
         history.setStretchFactor(1, 1)
         history.setSizes([560, 440])
+        # Two tabs: the ping history, and the device's details (the field
+        # grid that used to be "Overview", replacing the old text dump).
         self.tabs.addTab(history, "Ping history")
-
-        self.details = label("Select a device to view details.", "details")
-        self.details.setWordWrap(True)
-        self.details.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self.details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.tabs.addTab(self.details, "Details")
-        self.tabs.setCurrentIndex(1)
+        self.tabs.addTab(scroll, "Details")
+        self.tabs.setCurrentIndex(0)
         layout.addWidget(self.tabs, 1)
 
     # -- behaviour ---------------------------------------------------------
@@ -809,7 +805,6 @@ class Dashboard(QWidget):
         else:
             self.selection_title.setText(
                 f"{len(selected)} devices selected" if selected else "Select a device to inspect")
-            self.details.setText("Select one device to view its network details.")
             for value in self.overview_fields.values():
                 value.setText("—")
         self.chart.update()
@@ -853,28 +848,14 @@ class Dashboard(QWidget):
         }
         for name, value in fields.items():
             self.overview_fields[name].setText(value)
-        dash = "—"
-        self.details.setText(
-            f"Host: {e.host}{'' if e.port is None else f':{e.port}'}\n"
-            f"Description: {e.description or dash}     Group: {e.group or dash}\n"
-            f"Hostname: {e.hostname or dash}     DNS: {e.dns_name or dash}\n"
-            f"All IPs: {', '.join(e.all_resolved_ips) or dash}\n"
-            f"MAC: {e.mac_address or dash}     Vendor: {e.vendor or dash}\n"
-            f"Device: {e.device_type_guess or dash}     MTU: {e.mtu or dash}\n"
-            f"Open ports: {', '.join(map(str, e.open_ports)) or dash}\n"
-            f"Last status: {exact}     TTL: {dash if e.last_ttl is None else e.last_ttl}\n"
-            f"Sent: {e.total_sent}     Succeeded: {e.succeed_count}     Failed: {e.failed_count}"
-            f"     Packet loss: {e.percent_failed:.1f}%\n"
-            f"Min / max RTT: {dash if e.min_rtt_ms is None else e.min_rtt_ms} / "
-            f"{dash if e.max_rtt_ms is None else e.max_rtt_ms} ms     "
-            f"Longest failure streak: {e.max_consecutive_failed}")
 
 
 def apply_theme(window) -> None:
     c = theme_colors(window.settings.dark_background)
+    family = f"font-family: '{fonts.UI_FAMILY}';" if fonts.load() else ""
     window.setStyleSheet(f"""
         QMainWindow {{ background: {c['bg']}; }}
-        QWidget {{ color: {c['ink']}; font-size: 12px; }}
+        QWidget {{ color: {c['ink']}; font-size: 12px; {family} }}
         QWidget#body, QWidget#inspector, QSplitter {{ background: {c['bg']}; }}
         QScrollArea#overviewScroll, QScrollArea#overviewScroll > QWidget > QWidget {{ background: {c['bg']}; }}
         QDialog, QMenu {{ background: {c['surface']}; }}
@@ -897,7 +878,6 @@ def apply_theme(window) -> None:
         QLabel#statCaption {{ color: {c['muted']}; font-size: 12px; }}
         QLabel#selectionTitle {{ font-size: 14px; font-weight: 700; }}
         QLabel#selectionIp {{ color: {c['muted']}; font-size: 12px; }}
-        QLabel#details {{ padding: 12px; background: {c['surface']}; }}
         QFrame#card {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 8px; }}
         QToolButton, QPushButton {{ background: {c['surface']}; border: 1px solid {c['border']};
             border-radius: 6px; padding: 5px 9px; }}

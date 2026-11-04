@@ -6,7 +6,7 @@ lookup since whois takes a second or two."""
 from __future__ import annotations
 
 from PyQt6.QtCore import QCoreApplication, Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QFontDatabase, QGuiApplication
+from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QFormLayout,
     QGroupBox,
@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from . import fonts
 from ..ping import dns_ptr, whois
 from ..ping.mtu import format_mtu
 from ..ping.tracepath import Hop
@@ -64,7 +65,7 @@ class HopDetailsWindow(QWidget):
 
         self.raw = QPlainTextEdit()
         self.raw.setReadOnly(True)
-        self.raw.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self.raw.setFont(fonts.mono())
         self.raw.setPlaceholderText("Raw whois output")
 
         copy = QPushButton("Copy")

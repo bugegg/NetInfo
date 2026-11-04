@@ -231,3 +231,38 @@ def test_discovery_opens_lldp_cdp(window):
     discovery.click()
     assert opened == [True]
     assert window.action_trace_mtu in window._table.actions()
+
+
+def test_the_bundled_fonts_are_used_on_every_system(window):
+    from PyQt6.QtGui import QFontDatabase, QFontInfo
+    from PyQt6.QtWidgets import QApplication
+    from NetInfoView.ui import fonts
+
+    assert fonts.load()
+    assert {fonts.UI_FAMILY, fonts.MONO_FAMILY} <= set(QFontDatabase.families())
+    assert QApplication.font().family() == fonts.UI_FAMILY
+    assert QFontInfo(window._dashboard.stats[0].font()).family() == fonts.UI_FAMILY
+    assert fonts.mono().family() == fonts.MONO_FAMILY
+    # The fonts' licences ship with them.
+    assert (fonts.FONT_DIR / 'Inter-OFL.txt').exists()
+    assert (fonts.FONT_DIR / 'JetBrainsMono-OFL.txt').exists()
+
+
+def test_inspector_has_ping_history_and_details_tabs(window):
+    tabs = window._dashboard.tabs
+    assert [tabs.tabText(i) for i in range(tabs.count())] == ['Ping history', 'Details']
+    assert tabs.currentIndex() == 0
+    # Details holds the device's field grid (what used to be "Overview").
+    assert tabs.widget(1).widget() is window._dashboard.overview
+
+
+def test_default_column_order(window):
+    from PyQt6.QtCore import Qt
+
+    header = window._table.horizontalHeader()
+    shown = [header.logicalIndex(v) for v in range(header.count())
+             if not header.isSectionHidden(header.logicalIndex(v))]
+    titles = [window._proxy.headerData(i, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
+              for i in shown]
+    assert titles == ['Status', 'IP address', 'Hostname', 'DNS Name', 'MAC address', 'Vendor',
+                      'MTU', 'Succeed', 'Failed', 'Latency', 'Last Failed On']

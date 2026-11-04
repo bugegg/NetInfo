@@ -51,6 +51,10 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationName(APPLICATION)
     app.setOrganizationName(ORGANISATION)
 
+    from .ui import fonts
+
+    fonts.load()  # the same Inter / JetBrains Mono on macOS and Windows
+
     from .ui.main_window import MainWindow
 
     # Releases up to 1.4 stored these under the old PingInfoView name.

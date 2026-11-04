@@ -45,6 +45,7 @@ from ..ping.engine import EngineOptions
 from ..ping.icmp import _IP_DONTFRAG
 from ..ping.network_interfaces import list_interfaces as list_network_interfaces
 from ..settings import DisplayMode, HistoryMode, Settings
+from . import fonts
 from .dashboard import Dashboard, apply_theme
 from .add_hosts_dialog import AddHostsDialog
 from .app_update_thread import UpdateCheckThread, UpdateDownloadThread
@@ -72,6 +73,9 @@ UPDATE_CHECK_DELAY_MS = 3000
 
 class MainWindow(QMainWindow):
     def __init__(self, settings: Settings) -> None:
+        # Before any widget exists, so every one starts out in the bundled
+        # font (ui/fonts.py), not the system's.
+        fonts.load()
         super().__init__()
         self.settings = settings
         self._keys = itertools.count(1)
