@@ -201,6 +201,23 @@ def parse_cymru(output: str) -> dict[str, str]:
     return {}
 
 
+def as_org(ip: str) -> str:
+    """Who runs the network ``ip`` is routed in, from its AS (Team Cymru):
+    "Google LLC" for "GOOGLE - Google LLC, US", or the AS handle when that's
+    all there is; "" for a private address or a failed lookup. One name per
+    AS, where registry netnames differ from block to block (GOOGLE, GOGL)."""
+    if not _is_global(ip):
+        return ""
+    return org_from_as_name(parse_cymru(query(f" -v {ip}", CYMRU)).get("AS Name", ""))
+
+
+def org_from_as_name(as_name: str) -> str:
+    """"Google LLC" from "GOOGLE - Google LLC, US"."""
+    handle, _, description = as_name.partition(" - ")
+    description = description.rsplit(",", 1)[0].strip() if "," in description else description
+    return (description or handle).strip()
+
+
 def country(ip: str) -> str:
     """The two-letter code of the country ``ip`` is registered in (Team
     Cymru's answer: where the block was allocated, not where the device

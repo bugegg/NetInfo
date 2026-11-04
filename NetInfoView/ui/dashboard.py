@@ -16,7 +16,7 @@ from PyQt6.QtGui import (
     QAction, QColor, QFont, QFontInfo, QPainter, QPainterPath, QPen,
 )
 from PyQt6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QPushButton,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton,
     QScrollArea, QSizePolicy, QSplitter, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget,
     QToolButton, QVBoxLayout, QWidget,
 )
@@ -206,6 +206,9 @@ class TextDelegate(QStyledItemDelegate):
         super().__init__(parent)
         self.suffix = suffix
         self.mono = mono
+        #: The mono font for each cell font seen (they're all the same
+        #: unless the theme changes), so painting a cell doesn't build one.
+        self._mono_fonts: dict[str, QFont] = {}
 
     def initStyleOption(self, option, index):
         super().initStyleOption(option, index)
@@ -215,9 +218,13 @@ class TextDelegate(QStyledItemDelegate):
         else:
             option.text = "—"
         if self.mono:
-            size = QFont(option.font)
-            size.setPixelSize(QFontInfo(option.font).pixelSize())
-            option.font = fonts.mono(size)
+            key = option.font.key()
+            font = self._mono_fonts.get(key)
+            if font is None:
+                size = QFont(option.font)
+                size.setPixelSize(QFontInfo(option.font).pixelSize())
+                font = self._mono_fonts[key] = fonts.mono(size)
+            option.font = font
 
 
 class TimeDelegate(TextDelegate):
@@ -469,6 +476,9 @@ class Dashboard(QWidget):
         self.nav_discovery = self._tool_button("Discovery", "discovery", "navButton",
                                                w.action_lldp_cdp)
         nav.addWidget(self.nav_discovery)
+        # Net Path maps the routes to the selected device.
+        self.nav_net_path = self._tool_button("Net Path", "netpath", "navButton", w.action_net_path)
+        nav.addWidget(self.nav_net_path)
         # Settings opens Options straight away; the view toggles (dark
         # background, font, lower pane, ...) stay on the grid's right-click menu.
         self.nav_settings = self._tool_button("Settings", "settings", "navButton", w.action_options)

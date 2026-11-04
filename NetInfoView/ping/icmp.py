@@ -64,8 +64,9 @@ def _ip_header_length(data: bytes) -> int:
     return length if 20 <= length <= len(data) else 0
 
 
-def parse_reply(data: bytes) -> tuple[int, int, int, int | None] | None:
-    """Pull ``(sequence, icmp_type, icmp_code, ttl)`` out of a received packet.
+def parse_reply(data: bytes) -> tuple[int, int, int, int | None, int] | None:
+    """Pull ``(sequence, icmp_type, icmp_code, ttl, identifier)`` out of a
+    received packet.
 
     Echo replies carry the sequence in their own header. Error reports (type 3,
     11, ...) instead quote the IP header and first 8 bytes of the datagram that
@@ -79,15 +80,15 @@ def parse_reply(data: bytes) -> tuple[int, int, int, int | None] | None:
     icmp_type, icmp_code, _, ident, sequence = _ICMP_HEADER.unpack_from(data, offset)
 
     if icmp_type == ICMP_ECHO_REPLY:
-        return sequence, icmp_type, icmp_code, ttl
+        return sequence, icmp_type, icmp_code, ttl, ident
 
     # An error report: step over its 8-byte header into the quoted datagram.
     quoted = data[offset + _ICMP_HEADER.size :]
     inner_offset = _ip_header_length(quoted)
     if not inner_offset or len(quoted) < inner_offset + _ICMP_HEADER.size:
         return None
-    _, _, _, _, inner_sequence = _ICMP_HEADER.unpack_from(quoted, inner_offset)
-    return inner_sequence, icmp_type, icmp_code, ttl
+    _, _, _, inner_ident, inner_sequence = _ICMP_HEADER.unpack_from(quoted, inner_offset)
+    return inner_sequence, icmp_type, icmp_code, ttl, inner_ident
 
 
 class IcmpPinger:
@@ -173,7 +174,11 @@ class IcmpPinger:
             parsed = parse_reply(data)
             if parsed is None:
                 continue
-            sequence, icmp_type, icmp_code, ttl = parsed
+            sequence, icmp_type, icmp_code, ttl, ident = parsed
+            # Every ICMP socket sees every reply: skip the ones to other
+            # pingers (Net Path, /sbin/ping) that happen to share a sequence.
+            if ident != self._ident:
+                continue
             future = self._pending.get(sequence)
             if future is None or future.done():
                 continue
