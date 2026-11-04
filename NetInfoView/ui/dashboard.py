@@ -264,6 +264,23 @@ def x_intervals(width: float, label_width: float) -> int:
     return 1
 
 
+def outage_spans(samples, end: float, longest: float) -> list[tuple[float, float]]:
+    """(start, end) times when pings failed: each failed sample lasts until
+    the next sample (or `end`), but no longer than `longest` seconds (one
+    ping cycle), and back-to-back failures merge into one span."""
+    spans: list[tuple[float, float]] = []
+    for i, sample in enumerate(samples):
+        if sample.rtt_ms is not None:
+            continue
+        until = samples[i + 1].timestamp if i + 1 < len(samples) else end
+        until = min(until, sample.timestamp + longest)
+        if spans and sample.timestamp <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], until))
+        else:
+            spans.append((sample.timestamp, until))
+    return spans
+
+
 class LatencyChart(QWidget):
     """The selected device's latency over the last 60 seconds."""
 
@@ -323,15 +340,27 @@ class LatencyChart(QWidget):
             x = plot.left() + (sample.timestamp - start) / self.WINDOW_SECONDS * plot.width()
             return QPointF(x, plot.bottom() - min(sample.rtt_ms, ceiling) / ceiling * plot.height())
 
+        def x_at(t):
+            return plot.left() + (min(max(t, start), end) - start) / self.WINDOW_SECONDS * plot.width()
+
+        # Timeouts as solid red bars over the whole time they lasted, drawn
+        # under the latency line.
+        settings = self.window.settings
+        cycle = settings.ping_interval_seconds + settings.ping_timeout_ms / 1000
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(RED))
+        for t0, t1 in outage_spans(samples, end, cycle):
+            left, right = x_at(t0), x_at(t1)
+            width = max(right - left, 3.0)
+            painter.drawRect(QRectF(min(left, plot.right() - width), plot.top(), width, plot.height()))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
         runs, run = [], []
         for sample in samples:
             if sample.rtt_ms is None:
                 if run:
                     runs.append(run)
                 run = []
-                x = plot.left() + (sample.timestamp - start) / self.WINDOW_SECONDS * plot.width()
-                painter.setPen(QPen(QColor(RED), 2))
-                painter.drawLine(QPointF(x, plot.bottom() - 8), QPointF(x, plot.bottom()))
             else:
                 run.append(point(sample))
         if run:
