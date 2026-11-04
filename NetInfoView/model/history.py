@@ -147,6 +147,8 @@ class HistoryFilterProxy(QAbstractTableModel):
     def __init__(self) -> None:
         super().__init__()
         self.filter_keys: set[int] | None = None
+        #: Column index -> header text shown instead of HISTORY_HEADERS.
+        self.header_titles: dict[int, str] = {}
         self._source: HistoryModel | None = None
         self._rows: list[HistoryRecord] = []
 
@@ -169,6 +171,12 @@ class HistoryFilterProxy(QAbstractTableModel):
         return 0 if parent.isValid() else len(HISTORY_HEADERS)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if (
+            role == Qt.ItemDataRole.DisplayRole
+            and orientation == Qt.Orientation.Horizontal
+            and section in self.header_titles
+        ):
+            return self.header_titles[section]
         return _header(section, orientation, role)
 
     def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):

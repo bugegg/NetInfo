@@ -2,7 +2,7 @@
 (no display required — PyQt6 can build widgets headlessly for this)."""
 
 import pytest
-from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QToolBar
+from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QToolButton
 
 from NetInfoView.fileio.hostfile import parse_host_list
 from NetInfoView.ping import port_scan
@@ -554,11 +554,23 @@ def test_remove_selected_is_still_available_on_the_context_menu(window):
     assert "&Remove Selected" in names
 
 
-def test_check_for_updates_has_a_toolbar_button(window):
-    toolbar = window.findChild(QToolBar)
-    assert window.action_check_updates in toolbar.actions()
-    assert not window.action_check_updates.icon().isNull()
+def test_check_for_updates_has_a_sidebar_button(window):
+    buttons = [
+        b for b in window._dashboard.findChildren(QToolButton)
+        if b.text() == "Check for updates"
+    ]
+    assert len(buttons) == 1
+    assert not buttons[0].icon().isNull()
+    # Its menu holds both updates: the app, and the MAC vendor database.
+    assert buttons[0].menu().actions() == [
+        window.action_check_updates, window.action_update_vendor_db,
+    ]
     assert window.action_check_updates not in window._table.actions()
+
+
+def test_shortcuts_work_without_a_toolbar(window):
+    assert window.action_start in window.actions()
+    assert window.action_add in window.actions()
 
 
 def test_add_hosts_ok_disabled_until_a_host_is_entered(qapp):
@@ -604,7 +616,7 @@ def test_status_bar_counts_hosts_hidden_by_display_mode(window):
     window._set_display_mode(DisplayMode.SUCCEEDED)
     _entries_with_statuses(window, "192.168.1.1\n192.168.1.2")
     window._update_status_bar()
-    assert window.statusBar().currentMessage() == "0 item(s), Stopped, 2 hidden by filter"
+    assert window.statusBar().currentMessage() == "0 devices · Stopped · 2 hidden by filter"
 
 
 def test_adding_hosts_switches_a_filtered_view_back_to_show_all(window, monkeypatch):

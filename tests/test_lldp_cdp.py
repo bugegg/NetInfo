@@ -4,7 +4,7 @@ import os
 import struct
 
 import pytest
-from PyQt6.QtWidgets import QApplication, QToolBar
+from PyQt6.QtWidgets import QApplication, QToolButton
 
 from NetInfoView.ping import lldp_cdp
 from NetInfoView.ping.lldp_cdp import Neighbor
@@ -398,10 +398,13 @@ def test_button_opens_the_interface_picker(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(lldp_cdp_window, "ethernet_interfaces", lambda: [_iface("en7")])
     win = MainWindow(Settings())
     try:
-        assert win.action_lldp_cdp in win._table.actions()
-        assert win.action_lldp_cdp in win.findChild(QToolBar).actions()
-        window = win.check_lldp_cdp()  # no host selected: fine
-        assert window.isVisible() and not window.running
+        assert win.action_lldp_cdp not in win._table.actions()  # Discovery opens it
+        discovery = next(
+            b for b in win._dashboard.findChildren(QToolButton) if b.text() == "Discovery"
+        )
+        discovery.click()  # opens the window straight away, no host selected: fine
+        window = win._lldp_cdp_window
+        assert window is not None and window.isVisible() and not window.running
         assert window.interface.currentData() == "en7"
         monkeypatch.setattr(lldp_cdp_window, "ethernet_interfaces",
                             lambda: [_iface("en7"), _iface("en10")])
