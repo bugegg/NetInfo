@@ -55,6 +55,7 @@ from .mtu_thread import MtuThread
 from .engine_thread import EngineThread
 from .network_select_dialog import NetworkSelectDialog
 from .options_dialog import OptionsDialog
+from .netpath_window import NetPathThread, NetPathWindow
 from .tracepath_window import TracepathThread, TracepathWindow
 from .ping_graph import PingGraphWindow
 from .vendor_update_thread import VendorUpdateThread
@@ -297,6 +298,12 @@ class MainWindow(QMainWindow):
         )
         self.action_trace_mtu.triggered.connect(self.trace_path_mtu)
 
+        self.action_net_path = QAction("&Net Path", self)
+        self.action_net_path.setToolTip(
+            "Map every route to the selected host, hop by hop, and keep watching it"
+        )
+        self.action_net_path.triggered.connect(self.net_path)
+
         self.action_lldp_cdp = QAction(
             self._icon(sp.SP_DriveNetIcon), "Check &LLDP/CDP", self
         )
@@ -385,6 +392,7 @@ class MainWindow(QMainWindow):
         self._table.addAction(self.action_properties)
         self._table.addAction(self.action_graph)
         self._table.addAction(self.action_trace_mtu)
+        self._table.addAction(self.action_net_path)
         self._add_table_separator()
 
         self._table.addAction(self.action_remove)
@@ -684,6 +692,21 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Select a host with an IP address to trace", 3000)
             return None
         window = TracepathWindow(entry.display_name, entry.ip_address, self)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        return window
+
+    def net_path(self) -> NetPathWindow | None:
+        """Net Path to the first selected host, in a window of its own."""
+        entry = next((e for e in self._selected_entries() if e.ip_address), None)
+        if entry is None:
+            self.statusBar().showMessage("Select a host with an IP address to map its path", 3000)
+            return None
+        from .dashboard import computer_name
+        _, address = self._dashboard._network_text()
+        window = NetPathWindow(entry.display_name, entry.ip_address, self,
+                               source=(computer_name(), address))
         window.show()
         window.raise_()
         window.activateWindow()
@@ -1261,9 +1284,13 @@ class MainWindow(QMainWindow):
             self._mtu_thread.wait(3000)
         for window in self.findChildren(TracepathWindow):
             window.close()
+        for window in self.findChildren(NetPathWindow):
+            window.close()
         for window in self.findChildren(LldpCdpWindow):
             window.close()
         for thread in QCoreApplication.instance().findChildren(TracepathThread):
+            thread.wait(3000)
+        for thread in QCoreApplication.instance().findChildren(NetPathThread):
             thread.wait(3000)
         for thread in QCoreApplication.instance().findChildren(LldpCdpThread):
             thread.wait(3000)

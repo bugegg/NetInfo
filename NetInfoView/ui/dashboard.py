@@ -469,6 +469,9 @@ class Dashboard(QWidget):
         self.nav_discovery = self._tool_button("Discovery", "discovery", "navButton",
                                                w.action_lldp_cdp)
         nav.addWidget(self.nav_discovery)
+        # Net Path maps the routes to the selected device.
+        self.nav_net_path = self._tool_button("Net Path", "netpath", "navButton", w.action_net_path)
+        nav.addWidget(self.nav_net_path)
         # Settings opens Options straight away; the view toggles (dark
         # background, font, lower pane, ...) stay on the grid's right-click menu.
         self.nav_settings = self._tool_button("Settings", "settings", "navButton", w.action_options)
