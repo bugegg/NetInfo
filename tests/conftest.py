@@ -20,7 +20,7 @@ MACOS_ONLY = (
     "tests/test_lldp_cdp.py::test_ethernet_interfaces_order",
     "tests/test_app_update.py::test_running_app_bundle_when_frozen",
     "tests/test_app_update.py::test_extract_app_finds_the_bundle",
-    "tests/test_app_update.py::test_installer_script_swaps",
+    "tests/test_app_update.py::test_installer_script_",
 )
 
 
