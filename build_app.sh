@@ -26,7 +26,8 @@ rm -rf build dist
 
 PLIST=dist/NetInfo.app/Contents/Info.plist
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VERSION" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :LSApplicationCategoryType string public.app-category.utilities" "$PLIST"
 
 # Ad-hoc sign the whole bundle so Apple Silicon will run it at all.
