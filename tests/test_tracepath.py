@@ -293,8 +293,12 @@ def test_country_column(qapp, monkeypatch):
     from NetInfoView.ping import whois
     from NetInfoView.ui import tracepath_window
 
-    assert tracepath_window.country_label("th") == "\U0001F1F9\U0001F1ED Thailand"
-    assert tracepath_window.country_label("AP") == "\U0001F1E6\U0001F1F5 AP"
+    assert tracepath_window.country_label("th") == "Thailand"
+    assert tracepath_window.country_label("AP") == "AP"
+    # Flags are bundled images, not emoji (Windows has no flag emoji).
+    assert not tracepath_window.country_flag("th").isNull()
+    assert tracepath_window.country_flag("AP").isNull()
+    assert tracepath_window.country_flag("").isNull()
     assert whois.country("10.30.0.34") == ""
     monkeypatch.setattr(whois, "query", lambda ip, server="": (
         "15169 | 8.8.8.8 | 8.8.8.0/24 | US | arin | 2023-12-28 | GOOGLE - Google LLC, US"))
@@ -305,5 +309,6 @@ def test_country_column(qapp, monkeypatch):
     window.add_hop(Hop(1, "8.8.8.8", 1280, reached=True))
     window._on_country(1, "US")
     item = window.tree.topLevelItem(0)
-    assert item.text(tracepath_window.COUNTRY_COLUMN).endswith("United States")
+    assert item.text(tracepath_window.COUNTRY_COLUMN) == "United States"
+    assert not item.icon(tracepath_window.COUNTRY_COLUMN).isNull()
     window.close()
