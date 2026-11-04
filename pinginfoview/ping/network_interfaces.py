@@ -137,12 +137,16 @@ def _hex_mask_to_dotted(hex_mask: str) -> str:
 
 @dataclass(slots=True)
 class EthernetInterface:
-    name: str  # e.g. "en10"
+    name: str  # e.g. "en10"; on Windows Npcap's device name, \Device\NPF_{GUID}
     port: str  # System Settings' name for it, e.g. "USB 10/100/1000 LAN"; may be ""
     active: bool  # a link is up ("status: active")
+    #: What to call it instead of name + port (Windows, whose names are GUIDs).
+    display: str = ""
 
     @property
     def label(self) -> str:
+        if self.display:
+            return self.display
         return f"{self.name} ({self.port})" if self.port else self.name
 
 
@@ -151,6 +155,8 @@ def ethernet_interfaces() -> list[EthernetInterface]:
     Linked ones come first; within each, real wired ports, then Wi-Fi, then
     the rest (Thunderbolt bridge ports, Apple Silicon's internal "Ethernet
     Adapter (enN)"s)."""
+    if IS_WINDOWS:
+        return _ethernet_interfaces_npcap()
     try:
         output = subprocess.run(
             ["/sbin/ifconfig"], capture_output=True, text=True, timeout=5
@@ -169,6 +175,47 @@ def ethernet_interfaces() -> list[EthernetInterface]:
     ]
     interfaces.sort(key=lambda i: (not i.active, _port_rank(i.port), int(i.name[2:])))
     return interfaces
+
+
+def _ethernet_interfaces_npcap() -> list[EthernetInterface]:
+    """ethernet_interfaces() on Windows: the adapters Npcap can capture on,
+    named as Windows' settings name them ("Ethernet 2") where an IPv4
+    address ties the two together. [] if Npcap isn't installed."""
+    from . import npcap
+
+    try:
+        devices = npcap.devices()
+    except npcap.NpcapError:
+        return []
+    friendly = _friendly_names_by_ip()
+    interfaces = []
+    for device in devices:
+        name = next((friendly[ip] for ip in device.ipv4 if ip in friendly), "")
+        parts = [name or device.description or device.name]
+        if name and device.description:
+            parts.append(f"({device.description})")
+        if device.ipv4:
+            parts.append(f"\u2014 {device.ipv4[0]}")
+        interfaces.append(EthernetInterface(
+            name=device.name,
+            port="Wi-Fi" if device.wireless else device.description,
+            active=device.connected,
+            display=" ".join(parts),
+        ))
+    interfaces.sort(key=lambda i: (not i.active, i.port == "Wi-Fi", i.label.lower()))
+    return interfaces
+
+
+def _friendly_names_by_ip() -> dict[str, str]:
+    """IPv4 address -> the adapter's name in Windows' settings, from Qt."""
+    from PyQt6.QtNetwork import QAbstractSocket, QNetworkInterface
+
+    names: dict[str, str] = {}
+    for iface in QNetworkInterface.allInterfaces():
+        for entry in iface.addressEntries():
+            if entry.ip().protocol() == QAbstractSocket.NetworkLayerProtocol.IPv4Protocol:
+                names[entry.ip().toString()] = iface.humanReadableName() or iface.name()
+    return names
 
 
 def _port_rank(port: str) -> int:

@@ -11,6 +11,10 @@ MAX_MTU: macOS caps an unprivileged ping's datagram at 8192 bytes
 (sysctl net.inet.raw.maxdgram), so a 9000-byte path reads as ">=8212".
 Nothing is probed above the MTU of the Mac's own outgoing interface: ping
 waits out its full timeout even when the interface refuses the size at once.
+
+On Windows the same probes go through IcmpSendEcho (ping/icmp_windows.py),
+which sets Don't Fragment for any user, and the interface MTU comes from the
+IP Helper API instead of ``route``.
 """
 
 from __future__ import annotations
@@ -19,6 +23,8 @@ import subprocess
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from ..osinfo import IS_WINDOWS
 
 PING = "/sbin/ping"
 ROUTE = "/sbin/route"
@@ -49,6 +55,10 @@ LinkMtu = Callable[[str], int | None]
 def route_mtu(ip: str) -> int | None:
     """The MTU of the interface the Mac would send to `ip` through, from
     ``route -n get``; None if it can't be found."""
+    if IS_WINDOWS:
+        from .icmp_windows import link_mtu
+
+        return link_mtu(ip)
     try:
         done = subprocess.run(
             [ROUTE, "-n", "get", ip],
@@ -93,6 +103,10 @@ def ceiling_for(ip: str, link_mtu: LinkMtu = route_mtu) -> int:
 
 def probe(ip: str, payload: int) -> bool:
     """True if a ping of `payload` bytes with Don't Fragment set got a reply."""
+    if IS_WINDOWS:
+        from .icmp_windows import echo
+
+        return any(echo(ip, WAIT_MS, payload).status.succeeded for _ in range(ATTEMPTS))
     for _ in range(ATTEMPTS):
         try:
             done = subprocess.run(

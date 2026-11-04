@@ -377,6 +377,7 @@ def test_window_without_an_active_port(qapp, monkeypatch):
     from pinginfoview.ui import lldp_cdp_window
 
     monkeypatch.setattr(lldp_cdp_window, "ethernet_interfaces", lambda: [])
+    monkeypatch.setattr(lldp_cdp_window, "capture_unavailable", lambda: "")
     window = lldp_cdp_window.LldpCdpWindow()
     assert not window.running and window.interface.count() == 0
     assert not window.button.isEnabled()
@@ -409,3 +410,15 @@ def test_button_opens_the_interface_picker(qapp, tmp_path, monkeypatch):
         window.close()
     finally:
         win.close()
+
+
+def test_lldp_window_says_when_npcap_is_missing(qapp, monkeypatch):
+    from pinginfoview.ping import npcap
+    from pinginfoview.ui import lldp_cdp_window
+
+    monkeypatch.setattr(lldp_cdp_window, "ethernet_interfaces", lambda: [])
+    monkeypatch.setattr(lldp_cdp_window, "capture_unavailable", lambda: npcap.NOT_INSTALLED)
+    window = lldp_cdp_window.LldpCdpWindow()
+    assert not window.button.isEnabled()
+    assert "npcap.com" in window.status.text()
+    window.close()

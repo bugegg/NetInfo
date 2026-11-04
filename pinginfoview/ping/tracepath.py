@@ -9,6 +9,10 @@ every link up to it carries that size. When a link can't, the router in
 front of it usually says so ("frag needed and DF set (MTU 1492)") and the
 MTU it names is taken as is; when it stays silent instead, the size is found
 by a binary search at that hop, the same way Check MTU does it.
+
+On Windows each probe is an IcmpSendEcho with the TTL and Don't Fragment
+set (ping/icmp_windows.py). It doesn't pass on the MTU a "fragmentation
+needed" names, so a drop is always found by the search there.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from ..osinfo import IS_WINDOWS
 from .mtu import (
     ETHERNET_PAYLOAD, HEADERS, MAX_MTU, PING, WAIT_ARGS, WAIT_MS, LinkMtu, route_mtu,
 )
@@ -90,10 +95,36 @@ def probe(ip: str, ttl: int, payload: int) -> Reply:
     return reply
 
 
+def _echo_once_windows(ip: str, ttl: int, payload: int) -> Reply:
+    """One IcmpSendEcho, as the Reply ``/sbin/ping`` would have given."""
+    from .icmp_windows import echo
+
+    result = echo(ip, WAIT_MS, payload, ttl=ttl, dont_fragment=True)
+    return reply_for_status(result.status, result.reply_ip)
+
+
+def reply_for_status(status, source: str) -> Reply:
+    """A ping/result.PingStatus (and who sent it) as a Reply."""
+    from .result import PingStatus
+
+    if status is PingStatus.SUCCEEDED:
+        return Reply(REACHED, source)
+    if status is PingStatus.TTL_EXPIRED:
+        return Reply(EXCEEDED, source)
+    if status is PingStatus.FRAGMENTATION_NEEDED:
+        return Reply(FRAG, source)
+    if status in (PingStatus.TIMEOUT, PingStatus.NO_RESOURCES,
+                  PingStatus.GENERAL_FAILURE) or not source:
+        return Reply(TIMEOUT)
+    return Reply(UNREACHABLE, source, text=status.value)
+
+
 def _ping_once(ip: str, ttl: int, payload: int) -> Reply:
     """One ``/sbin/ping``, stopped as soon as anything answers. ping itself
     exits early only on the echo reply: after "Time to live exceeded" or
     "frag needed" it would sit out its interval and wait time (~2 s a hop)."""
+    if IS_WINDOWS:
+        return _echo_once_windows(ip, ttl, payload)
     try:
         process = subprocess.Popen(
             [PING, "-D", "-n", "-c", "1", *WAIT_ARGS, "-m", str(ttl),

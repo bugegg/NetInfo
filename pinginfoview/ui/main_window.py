@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .. import __version__
-from ..osinfo import FEATURE_LLDP_CDP, FEATURE_MTU, IS_WINDOWS
+from ..osinfo import IS_WINDOWS
 from ..app_update import AppUpdateError, Release, install_update, is_newer, self_update_supported
 from ..fileio import export, hostfile
 from ..fileio.vendor_db import VendorDB
@@ -367,11 +367,9 @@ class MainWindow(QMainWindow):
         self._table.addAction(self.action_copy)
         self._table.addAction(self.action_properties)
         self._table.addAction(self.action_graph)
-        if FEATURE_MTU:
-            self._table.addAction(self.action_check_mtu)
-            self._table.addAction(self.action_trace_mtu)
-        if FEATURE_LLDP_CDP:
-            self._table.addAction(self.action_lldp_cdp)
+        self._table.addAction(self.action_check_mtu)
+        self._table.addAction(self.action_trace_mtu)
+        self._table.addAction(self.action_lldp_cdp)
         self._add_table_separator()
 
         self._table.addAction(self.action_add)
@@ -436,19 +434,17 @@ class MainWindow(QMainWindow):
     def _build_toolbar(self) -> None:
         toolbar = self.addToolBar("Main")
         toolbar.setMovable(False)
-        lldp = (self.action_lldp_cdp, None) if FEATURE_LLDP_CDP else ()
         for action in (
             self.action_start, self.action_stop, None,
             self.action_add, self.action_clear_all, None,
-            *lldp,
+            self.action_lldp_cdp, None,
             self.action_options, self.action_update_vendor_db,
         ):
             toolbar.addSeparator() if action is None else toolbar.addAction(action)
-        if FEATURE_LLDP_CDP:
-            # The other buttons' icons say what they do; this one needs its label.
-            toolbar.widgetForAction(self.action_lldp_cdp).setToolButtonStyle(
-                Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-            )
+        # The other buttons' icons say what they do; this one needs its label.
+        toolbar.widgetForAction(self.action_lldp_cdp).setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
 
     # -- host list ---------------------------------------------------------
 
@@ -730,8 +726,8 @@ class MainWindow(QMainWindow):
     def _auto_check_mtu(self) -> None:
         """Check the MTU of each host once, as soon as it has answered a
         ping, alongside the device-info sweep's timer."""
-        if not FEATURE_MTU or self._mtu_thread is not None:
-            return  # not on this OS, or still busy; the next tick picks up the rest
+        if self._mtu_thread is not None:
+            return  # still busy; the next tick picks up the rest
         targets = [
             (e.key, e.ip_address)
             for e in self._model.entries()

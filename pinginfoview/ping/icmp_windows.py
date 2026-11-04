@@ -186,3 +186,54 @@ class IcmpWindowsPinger:
             )
         except RuntimeError:  # pool shut down mid-ping, i.e. stopping
             return PingResult(PingStatus.GENERAL_FAILURE)
+
+
+# -- one-off echoes, for Check MTU and Trace Path MTU -----------------------
+
+_shared_api: _IcmpApi | None = None
+
+
+def echo(ip: str, timeout_ms: int, payload_size: int, ttl: int = 64,
+         dont_fragment: bool = True) -> PingResult:
+    """One blocking echo request outside the engine (ping/mtu.py and
+    ping/tracepath.py run these on their own threads)."""
+    global _shared_api
+    if _shared_api is None:
+        _shared_api = _IcmpApi()
+    return send_echo(_shared_api, ip, timeout_ms, payload_size, ttl, dont_fragment)
+
+
+class _MIB_IFROW(ctypes.Structure):
+    _fields_ = [
+        ("wszName", ctypes.c_wchar * 256),
+        ("dwIndex", wintypes.DWORD),
+        ("dwType", wintypes.DWORD),
+        ("dwMtu", wintypes.DWORD),
+        ("dwSpeed", wintypes.DWORD),
+        ("dwPhysAddrLen", wintypes.DWORD),
+        ("bPhysAddr", ctypes.c_ubyte * 8),
+        ("dwAdminStatus", wintypes.DWORD),
+        ("dwOperStatus", wintypes.DWORD),
+        ("dwLastChange", wintypes.DWORD),
+        ("counters", wintypes.DWORD * 11),  # dwInOctets .. dwOutErrors
+        ("dwOutQLen", wintypes.DWORD),
+        ("dwDescrLen", wintypes.DWORD),
+        ("bDescr", ctypes.c_ubyte * 256),
+    ]
+
+
+def link_mtu(ip: str) -> int | None:
+    """The MTU of the interface Windows would send to `ip` through
+    (GetBestInterface, then GetIfEntry), or None if it can't be found."""
+    try:
+        dll = ctypes.WinDLL("iphlpapi.dll")
+        index = wintypes.DWORD(0)
+        if dll.GetBestInterface(ctypes.c_uint32(ip_to_ipaddr(ip)), ctypes.byref(index)) != 0:
+            return None
+        row = _MIB_IFROW(dwIndex=index.value)
+        if dll.GetIfEntry(ctypes.byref(row)) != 0:
+            return None
+    except (OSError, AttributeError):
+        return None
+    # The loopback pseudo-interface reports 0xFFFFFFFF: no limit worth using.
+    return row.dwMtu if 0 < row.dwMtu < 0xFFFF else None

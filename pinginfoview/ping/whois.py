@@ -4,15 +4,20 @@
 Used where an address has no name of its own, e.g. a router on the way to a
 host that has no PTR record, so the row still says whose network it is in.
 Drives the system's ``/usr/bin/whois``, which follows IANA's referral to the
-right registry by itself.
+right registry by itself. Windows has no whois command, so there the same
+conversation (port 43, IANA first, then each referral) is held directly.
 """
 
 from __future__ import annotations
 
 import ipaddress
 import re
+import socket
 import subprocess
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+
+from ..osinfo import IS_WINDOWS
 
 WHOIS = "/usr/bin/whois"
 TIMEOUT_S = 10
@@ -69,6 +74,8 @@ def _is_global(ip: str) -> bool:
 
 def query(ip: str, server: str = "") -> str:
     """The raw ``whois`` output for ``ip`` (from ``server`` if given), or ""."""
+    if IS_WINDOWS:
+        return query_direct(ip, server)
     command = [WHOIS, "-h", server, ip] if server else [WHOIS, ip]
     try:
         done = subprocess.run(
@@ -82,6 +89,62 @@ def query(ip: str, server: str = "") -> str:
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return done.stdout
+
+
+#: Where a lookup starts when no server is named: IANA knows which registry
+#: holds every block and says so in a ``refer:`` line.
+IANA = "whois.iana.org"
+WHOIS_PORT = 43
+MAX_REFERRALS = 3
+#: ``refer: whois.apnic.net`` (IANA) or ``ReferralServer: whois://whois.ripe.net``
+#: (ARIN, for a block it handed to another registry).
+_REFERRAL = re.compile(
+    r"^(?:refer|whois|ReferralServer):\s*(?:r?whois://)?([A-Za-z0-9.-]+)(?::(\d+))?\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+Ask = Callable[[str, str, int], str]
+
+
+def ask(server: str, text: str, port: int = WHOIS_PORT) -> str:
+    """One whois exchange: send ``text``, read until the server hangs up."""
+    try:
+        with socket.create_connection((server, port), timeout=TIMEOUT_S) as sock:
+            sock.sendall(text.encode("utf-8", "replace") + b"\r\n")
+            chunks = []
+            while chunk := sock.recv(4096):
+                chunks.append(chunk)
+    except OSError:
+        return ""
+    return b"".join(chunks).decode("utf-8", "replace").replace("\r\n", "\n")
+
+
+def referral(output: str) -> tuple[str, int] | None:
+    """The (server, port) ``output`` sends the query on to, if any."""
+    match = _REFERRAL.search(output)
+    if match is None:
+        return None
+    return match.group(1).lower(), int(match.group(2) or WHOIS_PORT)
+
+
+def query_direct(text: str, server: str = "", ask: Ask = ask) -> str:
+    """What ``whois [-h server] text`` prints, without the whois command:
+    the named server's answer, or IANA's followed by each referral's, as
+    macOS's whois prints them."""
+    text = text.strip()
+    if server:
+        return ask(server, text, WHOIS_PORT)
+    outputs: list[str] = []
+    visited: set[str] = set()
+    target: tuple[str, int] | None = (IANA, WHOIS_PORT)
+    while target is not None and target[0] not in visited and len(outputs) <= MAX_REFERRALS:
+        visited.add(target[0])
+        output = ask(target[0], text, target[1])
+        if not output:
+            break
+        outputs.append(output)
+        target = referral(output)
+    return "\n".join(outputs)
 
 
 # -- details, for a hop's Details window ----------------------------------

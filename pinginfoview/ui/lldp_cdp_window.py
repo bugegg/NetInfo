@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..ping import arp
-from ..ping.lldp_cdp import DEFAULT_LISTEN_SECONDS, Neighbor, listen
+from ..ping.lldp_cdp import DEFAULT_LISTEN_SECONDS, Neighbor, capture_unavailable, listen
 from ..ping.network_interfaces import ethernet_interfaces
 
 #: Dot colours in the status panel.
@@ -185,7 +185,10 @@ class LldpCdpWindow(QWidget):
             self.interface.setCurrentIndex(index)
         has_any = self.interface.count() > 0
         self.button.setEnabled(has_any)
-        if has_any:
+        unavailable = "" if has_any else capture_unavailable()
+        if unavailable:
+            self.status.setText(unavailable)
+        elif has_any:
             self.status.setText("Choose an interface and press Check")
         else:
             self.status.setText("No active interface: plug in a cable and press Refresh")
@@ -224,7 +227,9 @@ class LldpCdpWindow(QWidget):
         self._show_progress()
 
     def _on_error(self, interface: str, message: str) -> None:
-        self._errors.append(f"{interface}: {message}")
+        # Only the chosen interface is listened on: name it as the list does
+        # (on Windows `interface` is a device GUID).
+        self._errors.append(f"{self._label or interface}: {message}")
         self._show_progress()
 
     def _on_tick(self) -> None:

@@ -1,8 +1,8 @@
-"""Which OS the app runs on, and what that leaves it able to do.
+"""Which OS the app runs on, and helpers that differ between them.
 
-NetInfo began as a macOS app; on Windows a few features that read packets or
-lean on macOS command-line tools aren't available yet (see the FEATURES_*
-flags), and the UI hides them rather than offering something that can't work.
+NetInfo began as a macOS app. On Windows every feature works too, through
+Windows' own APIs where macOS uses its command-line tools; Check LLDP/CDP
+additionally needs Npcap (https://npcap.com) installed.
 """
 
 from __future__ import annotations
@@ -12,14 +12,6 @@ import sys
 
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
-
-#: Check MTU and Trace Path MTU drive the system's ping/route tools.
-FEATURE_MTU = not IS_WINDOWS
-#: Check LLDP/CDP reads raw frames through /dev/bpf.
-FEATURE_LLDP_CDP = not IS_WINDOWS
-#: The hop details' Whois runs /usr/bin/whois.
-FEATURE_WHOIS = not IS_WINDOWS
-
 
 def run_quietly(args: list[str], timeout: float) -> str:
     """stdout of a command, or "" if it can't be run.

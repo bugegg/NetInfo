@@ -1,6 +1,7 @@
 """On Windows, skip the tests of macOS-only code paths: they parse or drive
-macOS tools (ifconfig, dscacheutil, ping -D, route, ditto) or use features
-the Windows build hides (MTU, Trace Path MTU, LLDP/CDP)."""
+macOS tools (ifconfig, dscacheutil, route, ditto) or read /dev/bpf through
+pipes and select(). tests/test_windows_support.py covers what Windows uses
+in their place."""
 
 import sys
 
@@ -14,12 +15,9 @@ MACOS_ONLY = (
     "tests/test_hostname.py::test_trailing_dot",
     "tests/test_hostname.py::test_empty_string_when_neither",
     "tests/test_mtu.py::test_route_mtu_reads_the_loopback_interface",
-    "tests/test_mtu.py::test_real_ping_reaches_loopback",
-    "tests/test_mtu.py::test_mtu_is_checked_automatically",
-    "tests/test_mtu.py::test_check_mtu_fills_the_column",
-    "tests/test_tracepath.py::test_real_trace_to_loopback",
-    "tests/test_tracepath.py::test_menu_opens_a_trace",
-    "tests/test_lldp_cdp.py::",
+    "tests/test_lldp_cdp.py::test_listen_reports_each_switch_port_once",
+    "tests/test_lldp_cdp.py::test_listen_stops_when_asked",
+    "tests/test_lldp_cdp.py::test_ethernet_interfaces_order",
     "tests/test_app_update.py::test_running_app_bundle_when_frozen",
     "tests/test_app_update.py::test_extract_app_finds_the_bundle",
     "tests/test_app_update.py::test_installer_script_swaps",

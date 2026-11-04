@@ -8,6 +8,9 @@ a router, so they're read straight off each active ``enN`` interface through
 BPF (/dev/bpf*), with a kernel filter so only those frames reach Python.
 BPF needs no root when the user is in the ``access_bpf`` group, which
 Wireshark's ChmodBPF sets up; otherwise opening it fails with a clear error.
+
+On Windows the frames come through Npcap instead (ping/npcap.py), with the
+same kernel filter.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ import ctypes
 
 try:
     import fcntl
-except ImportError:  # Windows: no /dev/bpf, and the UI hides this feature
+except ImportError:  # Windows: no /dev/bpf; Npcap is used instead
     fcntl = None
 import ipaddress
 import os
@@ -25,6 +28,8 @@ import struct
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+
+from ..osinfo import IS_WINDOWS
 
 #: Long enough for a 60 s CDP announcement to arrive.
 DEFAULT_LISTEN_SECONDS = 65
@@ -514,6 +519,9 @@ def listen(
     """Listen on each interface for `seconds`, reporting each switch port
     once, as soon as it's heard. Interfaces that can't be opened are
     reported through on_error and skipped."""
+    if IS_WINDOWS:
+        _listen_npcap(interfaces, on_neighbor, seconds, stopped, on_error)
+        return
     descriptors: dict[int, str] = {}
     for interface in interfaces:
         try:
@@ -545,3 +553,60 @@ def listen(
     finally:
         for fd in descriptors:
             os.close(fd)
+
+
+def capture_unavailable() -> str:
+    """Why LLDP/CDP can't be listened for on this computer at all, or ""."""
+    if IS_WINDOWS:
+        from . import npcap
+
+        return npcap.available()
+    return ""
+
+
+def _filter_program() -> _BpfProgram:
+    insns = (_BpfInsn * len(_FILTER))(*(_BpfInsn(*insn) for insn in _FILTER))
+    program = _BpfProgram(len(_FILTER), insns)
+    program._insns = insns  # keep the array alive as long as the program
+    return program
+
+
+def _listen_npcap(
+    interfaces: list[str],
+    on_neighbor: Callable[[Neighbor], None],
+    seconds: float,
+    stopped: Callable[[], bool],
+    on_error: Callable[[str, str], None],
+) -> None:
+    """listen() on Windows: each adapter read in turn through Npcap, each
+    read returning within npcap.READ_TIMEOUT_MS."""
+    from . import npcap
+
+    program = _filter_program()
+    captures: list[npcap.Capture] = []
+    for interface in interfaces:
+        try:
+            captures.append(npcap.Capture(interface, program))
+        except npcap.NpcapError as error:
+            on_error(interface, str(error))
+    seen: set[tuple[str, str, str, str]] = set()
+    deadline = time.monotonic() + seconds
+    try:
+        while captures and not stopped() and time.monotonic() < deadline:
+            for capture in list(captures):
+                try:
+                    frame = capture.next_frame()
+                except npcap.NpcapError as error:  # e.g. the adapter was removed
+                    on_error(capture.name, str(error))
+                    captures.remove(capture)
+                    capture.close()
+                    continue
+                if frame is None:
+                    continue
+                neighbor = parse_frame(frame, capture.name)
+                if neighbor is not None and neighbor.key not in seen:
+                    seen.add(neighbor.key)
+                    on_neighbor(neighbor)
+    finally:
+        for capture in captures:
+            capture.close()

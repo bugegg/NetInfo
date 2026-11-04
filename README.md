@@ -26,8 +26,10 @@ previously called PingInfoView.
    *"Windows protected your PC"*. Click **More info → Run anyway**.
 3. Start NetInfo from the Start menu.
 
-Windows 10 or 11, 64-bit. Not available on Windows yet: Check MTU, Trace
-Path MTU and Check LLDP/CDP. Settings are kept in the registry under
+Windows 10 or 11, 64-bit. Every feature of the Mac version works on
+Windows. **Check LLDP/CDP** also needs [Npcap](https://npcap.com) (the
+capture driver Wireshark installs); without it, that window says so. Settings
+are kept in the registry under
 `HKEY_CURRENT_USER\Software\pinginfoview`; uninstall from
 **Settings → Apps**.
 

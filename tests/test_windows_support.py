@@ -115,3 +115,190 @@ def test_list_interfaces_on_windows():
 
     for interface in list_interfaces():
         assert interface.cidr.count("/") == 1
+
+
+# -- Check MTU / Trace Path MTU ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "status, source, kind",
+    [
+        (PingStatus.SUCCEEDED, "10.0.0.9", "reached"),
+        (PingStatus.TTL_EXPIRED, "192.168.1.1", "exceeded"),
+        (PingStatus.FRAGMENTATION_NEEDED, "10.0.0.1", "frag"),
+        (PingStatus.FRAGMENTATION_NEEDED, "", "frag"),  # this PC's own link refused it
+        (PingStatus.HOST_UNREACHABLE, "10.0.0.1", "unreachable"),
+        (PingStatus.HOST_UNREACHABLE, "", "timeout"),  # no router to pin it on
+        (PingStatus.TIMEOUT, "", "timeout"),
+        (PingStatus.GENERAL_FAILURE, "", "timeout"),
+    ],
+)
+def test_echo_statuses_become_trace_replies(status, source, kind):
+    from pinginfoview.ping.tracepath import reply_for_status
+
+    reply = reply_for_status(status, source)
+    assert reply.kind == kind
+    assert reply.source == (source if kind != "timeout" else "")
+    if kind == "unreachable":
+        assert reply.text == "Destination Host Unreachable"
+
+
+def test_a_frag_without_an_mtu_is_searched_for():
+    """IcmpSendEcho doesn't pass on the MTU a router names, so the drop is
+    found by search, and pinned on the hop all the same."""
+    from pinginfoview.ping import tracepath
+    from pinginfoview.ping.tracepath import FRAG, REACHED, Reply
+
+    def probe(ip, ttl, payload):
+        return Reply(REACHED, "10.0.0.9") if payload + tracepath.HEADERS <= 1400 else Reply(FRAG)
+
+    hop = tracepath.trace_hop("10.0.0.9", 1, 1500, probe)
+    assert hop.mtu == 1400 and hop.reached
+    assert hop.note == "MTU drops to 1400 (no router reported it)"
+
+
+@windows_only
+def test_real_mtu_probe_on_windows():
+    from pinginfoview.ping import mtu
+
+    assert mtu.probe("127.0.0.1", 1472)
+    assert mtu.find_mtu("127.0.0.1") == mtu.MAX_MTU
+
+
+@windows_only
+def test_link_mtu_of_the_default_route():
+    from pinginfoview.ping.icmp_windows import link_mtu
+
+    found = link_mtu("8.8.8.8")
+    assert found is None or 576 <= found <= 65535
+
+
+# -- Whois ----------------------------------------------------------------------
+
+
+IANA_8888 = "% IANA WHOIS server\n\nrefer:        whois.arin.net\n\ninetnum:      8.0.0.0 - 8.255.255.255\n"
+ARIN_8888 = "NetRange:       8.8.8.0 - 8.8.8.255\nNetName:        GOGL\n"
+
+
+def test_direct_whois_follows_ianas_referral():
+    from pinginfoview.ping import whois
+
+    asked = []
+
+    def ask(server, text, port):
+        asked.append((server, text, port))
+        return {"whois.iana.org": IANA_8888, "whois.arin.net": ARIN_8888}[server]
+
+    output = whois.query_direct("8.8.8.8", ask=ask)
+    assert asked == [("whois.iana.org", "8.8.8.8", 43), ("whois.arin.net", "8.8.8.8", 43)]
+    assert whois.parse(output) == "GOGL"
+
+
+def test_direct_whois_follows_arins_referral_server_once():
+    from pinginfoview.ping import whois
+
+    answers = {
+        "whois.iana.org": "refer: whois.arin.net\n",
+        "whois.arin.net": "NetName: RIPE-ERX\nReferralServer:  whois://whois.ripe.net\n",
+        # Points back at ARIN: must not loop.
+        "whois.ripe.net": "netname: EXAMPLE-NET\nwhois: whois.arin.net\n",
+    }
+    asked = []
+
+    def ask(server, text, port):
+        asked.append(server)
+        return answers[server]
+
+    assert whois.parse(whois.query_direct("193.0.0.1", ask=ask)) == "EXAMPLE-NET"
+    assert asked == ["whois.iana.org", "whois.arin.net", "whois.ripe.net"]
+
+
+def test_direct_whois_to_a_named_server_asks_only_it():
+    from pinginfoview.ping import whois
+
+    asked = []
+    whois.query_direct(" -v 8.8.8.8", whois.CYMRU,
+                       ask=lambda s, t, p: asked.append((s, t)) or "")
+    assert asked == [(whois.CYMRU, "-v 8.8.8.8")]
+
+
+def test_whois_referral_forms():
+    from pinginfoview.ping.whois import referral
+
+    assert referral("refer:        whois.apnic.net\n") == ("whois.apnic.net", 43)
+    assert referral("ReferralServer:  whois://whois.ripe.net\n") == ("whois.ripe.net", 43)
+    assert referral("ReferralServer:  rwhois://rwhois.example.net:4321\n") == (
+        "rwhois.example.net", 4321)
+    assert referral("netname: X\n") is None
+
+
+# -- LLDP/CDP through Npcap ----------------------------------------------------
+
+
+def test_npcap_connection_status():
+    from pinginfoview.ping import npcap
+
+    assert npcap.is_connected(npcap.PCAP_IF_CONNECTION_STATUS_CONNECTED)
+    assert not npcap.is_connected(0x20 | npcap.PCAP_IF_UP | npcap.PCAP_IF_RUNNING)
+    # Status unknown: go by up and running.
+    assert npcap.is_connected(npcap.PCAP_IF_UP | npcap.PCAP_IF_RUNNING)
+    assert not npcap.is_connected(npcap.PCAP_IF_UP)
+
+
+def test_npcap_adapters_are_named_as_windows_names_them(monkeypatch):
+    from pinginfoview.ping import network_interfaces as ni
+    from pinginfoview.ping import npcap
+
+    monkeypatch.setattr(npcap, "devices", lambda: [
+        npcap.Device(r"\Device\NPF_{W}", "Intel(R) Wi-Fi 6 AX201", ("192.168.1.5",), True, True),
+        npcap.Device(r"\Device\NPF_{D}", "Realtek USB GbE", (), False, False),
+        npcap.Device(r"\Device\NPF_{E}", "Intel(R) Ethernet I219-V", ("10.0.0.5",), True, False),
+    ])
+    monkeypatch.setattr(ni, "_friendly_names_by_ip",
+                        lambda: {"192.168.1.5": "Wi-Fi", "10.0.0.5": "Ethernet 2"})
+    found = ni._ethernet_interfaces_npcap()
+    assert [(i.name, i.label, i.active) for i in found] == [
+        (r"\Device\NPF_{E}", "Ethernet 2 (Intel(R) Ethernet I219-V) — 10.0.0.5", True),
+        (r"\Device\NPF_{W}", "Wi-Fi (Intel(R) Wi-Fi 6 AX201) — 192.168.1.5", True),
+        (r"\Device\NPF_{D}", "Realtek USB GbE", False),
+    ]
+
+
+def test_without_npcap_there_are_no_adapters(monkeypatch):
+    from pinginfoview.ping import network_interfaces as ni
+    from pinginfoview.ping import npcap
+
+    def missing():
+        raise npcap.NpcapError(npcap.NOT_INSTALLED)
+
+    monkeypatch.setattr(npcap, "devices", missing)
+    assert ni._ethernet_interfaces_npcap() == []
+
+
+def test_npcap_listen_reports_each_switch_port_once(monkeypatch):
+    from pinginfoview.ping import lldp_cdp, npcap
+    from test_lldp_cdp import cdp_frame, lldp_frame
+
+    frames = {"good": [lldp_frame(), None, lldp_frame(), cdp_frame()]}
+
+    class FakeCapture:
+        def __init__(self, name, program):
+            if name == "bad":
+                raise npcap.NpcapError("access denied")
+            assert program.bf_len == len(lldp_cdp._FILTER)
+            self.name, self.closed = name, False
+
+        def next_frame(self):
+            queue = frames[self.name]
+            return queue.pop(0) if queue else None
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(npcap, "Capture", FakeCapture)
+    heard, errors = [], []
+    lldp_cdp._listen_npcap(["bad", "good"], heard.append, 0.3, lambda: False,
+                           lambda i, m: errors.append((i, m)))
+    assert [(n.interface, n.protocol) for n in heard] == [("good", "LLDP"), ("good", "CDP")]
+    assert errors == [("bad", "access denied")]
+
