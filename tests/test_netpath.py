@@ -386,3 +386,53 @@ def test_double_clicking_a_box_on_screen_opens_it_without_crashing(qapp, monkeyp
     double_click("142.0.0.1")  # a hop of the open box: folds it again
     assert "group:GOOGLE:2" in window.items
     window.close()
+
+
+# Home router, then a carrier numbering its routers privately around one
+# public hop of its own (180.0.0.1), then Google.
+def _through_a_carrier():
+    hops = ["192.168.1.1", "10.1.0.1", "10.2.0.1", "180.0.0.1", "10.3.0.1", "142.0.0.1"]
+    route = [Answer(address, ttl) for ttl, address in enumerate(hops, start=1)]
+    return Sweep(0, 1, [route + [Answer("8.8.8.8", 9, reached=True)]])
+
+
+def test_private_hops_count_with_the_provider_around_them():
+    graph = netpath.build_graph([_through_a_carrier()], "8.8.8.8")
+    orgs = {"180.0.0.1": "Carrier", "142.0.0.1": "Google LLC"}
+    found = netpath.private_hop_orgs(graph, orgs, local="192.168.1.105")
+    # Before the carrier's first public hop: the one after; after it: the one before.
+    assert found == {"10.1.0.1": "Carrier", "10.2.0.1": "Carrier", "10.3.0.1": "Carrier"}
+    # The home router (hop 1, this computer's network) is left alone.
+    assert "192.168.1.1" not in found
+    groups = netpath.provider_groups(graph, {**orgs, **found})
+    assert {key for key, group in groups.items() if "Carrier" in group} == {
+        "10.1.0.1", "10.2.0.1", "180.0.0.1", "10.3.0.1"}
+
+
+def test_the_main_route_follows_the_most_taken_links():
+    # Three probes go via 10.0.1.1, one via 10.0.2.1.
+    via = {n: [Answer("10.0.0.1", 1), Answer(f"10.0.{n}.1", 2), Answer("8.8.8.8", 3, reached=True)]
+           for n in (1, 2)}
+    graph = netpath.build_graph([Sweep(0, 4, [via[1], via[1], via[1], via[2]])], "8.8.8.8")
+    assert netpath.main_route(graph) == [SOURCE, "10.0.0.1", "10.0.1.1", DESTINATION]
+    # Only the links given count: without 10.0.1.1's, the other way.
+    usable = set(graph.edges) - {("10.0.0.1", "10.0.1.1")}
+    assert netpath.main_route(graph, usable)[2] == "10.0.2.1"
+
+
+def test_the_main_route_is_bold_and_the_others_faint(qapp, monkeypatch):
+    from NetInfoView.ui import netpath_window as nw
+
+    monkeypatch.setattr(nw.NetPathWindow, "start", lambda self: None)
+    window = nw.NetPathWindow("dns.google", "8.8.8.8")
+    via = {n: [Answer("10.0.0.1", 1), Answer(f"10.0.{n}.1", 2), Answer("8.8.8.8", 3, reached=True)]
+           for n in (1, 2)}
+    window.add_sweep(Sweep(0, 4, [via[1], via[1], via[1], via[2]]))
+    main, other = window.edge_items[("10.0.0.1", "10.0.1.1")][0], window.edge_items[("10.0.0.1", "10.0.2.1")][0]
+    assert main.pen().widthF() > other.pen().widthF() and other.opacity() < main.opacity()
+    texts = [window.details_grid.itemAtPosition(r, 1).widget().text()
+             for r in range(window.details_grid.rowCount())
+             if window.details_grid.itemAtPosition(r, 1) is not None]
+    assert any(t.startswith("3 of 4 probe flows took all of it") and "2: 10.0.1.1" in t
+               for t in texts)
+    window.close()

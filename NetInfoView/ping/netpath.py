@@ -17,6 +17,7 @@ may show a link between two hops of different routes.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import select
 import socket
@@ -523,3 +524,50 @@ def likely_edges(graph: PathGraph, everything: PathGraph,
             if own and not any(pair in keep for pair in own):
                 keep.add(max(own, key=likelihood))
     return keep
+
+
+def is_public(address: str) -> bool:
+    try:
+        return ipaddress.ip_address(address).is_global
+    except ValueError:
+        return False
+
+
+def private_hop_orgs(graph: PathGraph, orgs: dict[str, str],
+                     local: str = "") -> dict[str, str]:
+    """A provider for each hop with a private address beyond this computer's
+    own network: carriers number their inside routers privately (10.x,
+    100.64.x), so those have no AS of their own. Each gets the provider of
+    the nearest public hop before it, or after it for hops before the first
+    one. Hop 1, and hops in `local`'s /16, are this computer's own network
+    and stay as they are."""
+    lan = ".".join(local.split(".")[:2]) + "." if local.count(".") == 3 else None
+    public = sorted((node.ttl, orgs[node.address]) for node in graph.nodes.values()
+                    if node.address and orgs.get(node.address) and is_public(node.address))
+    found: dict[str, str] = {}
+    for key, node in graph.nodes.items():
+        address = node.address
+        if (key in (SOURCE, DESTINATION) or not address or is_public(address)
+                or node.ttl <= 1 or (lan and address.startswith(lan))):
+            continue
+        before = [org for ttl, org in public if ttl < node.ttl]
+        after = [org for ttl, org in public if ttl > node.ttl]
+        org = before[-1] if before else after[0] if after else ""
+        if org:
+            found[address] = org
+    return found
+
+
+def main_route(graph: PathGraph, edges: set[tuple[str, str]] | None = None) -> list[str]:
+    """The route most probes took, as hop keys from SOURCE: at each hop, on
+    along the link the most probes took, until the host (or a dead end)."""
+    usable = edges if edges is not None else set(graph.edges)
+    route, here = [SOURCE], SOURCE
+    while here != DESTINATION:
+        ways = [graph.edges[pair] for pair in usable
+                if pair[0] == here and pair[1] not in route]
+        if not ways:
+            break
+        here = max(ways, key=lambda edge: (len(edge.flows), not edge.unknown, edge.child)).child
+        route.append(here)
+    return route

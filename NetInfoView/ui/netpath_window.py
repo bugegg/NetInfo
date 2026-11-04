@@ -7,6 +7,7 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from itertools import pairwise
 
 from PyQt6.QtCore import QCoreApplication, QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
@@ -145,7 +146,9 @@ def layout(graph: PathGraph) -> dict[str, QPointF]:
     for edge in graph.edges.values():
         parents.setdefault(edge.child, []).append(edge.parent)
     positions: dict[str, QPointF] = {}
-    for ttl in sorted(columns):
+    # One column per hop distance that has something to draw, side by side:
+    # a provider's box covers several hops, and leaves no gap behind it.
+    for column, ttl in enumerate(sorted(columns)):
         keys = columns[ttl]
 
         def weight(key: str) -> tuple[float, str]:
@@ -155,7 +158,7 @@ def layout(graph: PathGraph) -> dict[str, QPointF]:
         keys.sort(key=weight)
         top = -(len(keys) - 1) * ROW_GAP / 2
         for row, key in enumerate(keys):
-            positions[key] = QPointF(ttl * COLUMN_GAP, top + row * ROW_GAP)
+            positions[key] = QPointF(column * COLUMN_GAP, top + row * ROW_GAP)
     return positions
 
 
@@ -448,7 +451,7 @@ class NetPathWindow(QWidget):
         self.past_box.toggled.connect(self.refresh_view)
         zoom.addWidget(self.past_box)
         zoom.addStretch(1)
-        self.legend = _label("Circle = hop · box = a provider's hops · width = share of probes · "
+        self.legend = _label("Bold = main route (most probes) · box = a provider's hops · "
                              "amber ≥25 ms or ≥5% lost · red ≥100 ms or ≥10% lost · dashed = no reply",
                              "muted")
         zoom.addWidget(self.legend)
@@ -650,7 +653,11 @@ class NetPathWindow(QWidget):
         #: The trace on screen with every hop as traced (boxes hold its keys).
         self.raw_graph = self.graphs[index]
         history = self.history_graph or self.graphs[index]
-        self.group_of = (netpath.provider_groups(history, self.orgs)
+        # Carriers' inside routers have private addresses and no AS: count
+        # them with the provider around them, so the carrier is a box too.
+        orgs = {**self.orgs,
+                **netpath.private_hop_orgs(history, self.orgs, self._source[1])}
+        self.group_of = (netpath.provider_groups(history, orgs)
                          if self.group_box.isChecked() else {})
         folded = {key: group for key, group in self.group_of.items()
                   if group not in self.expanded}
@@ -719,21 +726,29 @@ class NetPathWindow(QWidget):
             item.setOpacity(0.7)
             self.edge_items[pair] = (item, False)
         likely = netpath.likely_edges(graph, everything)
+        #: The route most probes took: drawn bold, the other routes faint.
+        self.main_route = netpath.main_route(graph, likely)
+        main = set(pairwise(self.main_route))
         for edge in graph.edges.values():
             if (edge.parent, edge.child) not in likely:
                 continue  # rarely taken: left out, like low transit likelihood
+            on_main = (edge.parent, edge.child) in main
             path = curve(positions[edge.parent], positions[edge.child])
             share = len(edge.flows) / max(1, graph.flows)
             silent = graph.nodes[edge.parent].silent or graph.nodes[edge.child].silent
             level, _ = self.edge_condition(graph, edge)
             if edge.unknown or silent:
                 color = muted if level == netpath.OK else QColor(LEVEL_COLORS[level])
-                pen = QPen(color, 2, Qt.PenStyle.DashLine)
+                pen = QPen(color, 3 if on_main else 1.5, Qt.PenStyle.DashLine)
+            elif on_main:
+                pen = QPen(QColor(LEVEL_COLORS[level]), 5 + 3 * share)
             else:
-                pen = QPen(QColor(LEVEL_COLORS[level]), 2 + 5 * share)
+                pen = QPen(QColor(LEVEL_COLORS[level]), 1.5 + 2 * share)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             item = scene.addPath(path, pen)
-            item.setZValue(0)
+            item.setZValue(0.5 if on_main else 0)
+            if not on_main:
+                item.setOpacity(0.45)
             known = everything.edges.get((edge.parent, edge.child))
             if known is not None and not edge.unknown:
                 item.setToolTip(f"Transit likelihood {len(known.flows) / max(1, everything.flows):.0%}"
@@ -867,6 +882,28 @@ class NetPathWindow(QWidget):
         else:
             self._details_for_node(graph, key)
 
+    def _main_route_text(self, graph: PathGraph) -> str:
+        """The bold route, hop by hop, and how many probes took all of it."""
+        route = getattr(self, "main_route", [])
+        steps = []
+        for key in route[1:]:
+            node = graph.nodes[key]
+            if key == DESTINATION:
+                steps.append(self._title)
+            elif node.members:
+                steps.append(node.label)
+            elif node.silent:
+                steps.append(f"{node.ttl}: *")
+            else:
+                steps.append(f"{node.ttl}: {node.address}")
+        flows = None
+        for pair in pairwise(route):
+            edge = graph.edges.get(pair)
+            if edge is not None:
+                flows = set(edge.flows) if flows is None else flows & edge.flows
+        share = f"{len(flows or ())} of {graph.flows} probe flows took all of it\n"
+        return share + " → ".join(steps) if steps else "—"
+
     def _details_for_group(self, graph: PathGraph, key: str) -> None:
         """A provider's hops shown as one box."""
         node = graph.nodes[key]
@@ -950,6 +987,7 @@ class NetPathWindow(QWidget):
             ("Hops", str(hops)),
             ("Routers", str(routers)),
             ("Branch points", str(splits) if splits else "None: a single route"),
+            ("Main route", self._main_route_text(graph)),
             ("Latency", format_range(end) if end else "—"),
         ]
         problems = []
