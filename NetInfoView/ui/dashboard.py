@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget,
 )
 
+from .. import __version__
 from ..model.columns import COLUMNS
 from ..model.samples import nice_ceiling
 from ..ping.port_scan import STATIC_PORTS, STATIC_UDP_PORTS
@@ -470,7 +471,7 @@ class Dashboard(QWidget):
         # and the rest are on the grid's right-click menu.
         self.nav_devices = self._tool_button("Devices", "devices", "navButton", w.action_add)
         nav.addWidget(self.nav_devices)
-        nav.addWidget(self._tool_button("Ping monitor", "ping", "navButton", w.action_graph))
+        nav.addWidget(self._tool_button("Ping monitor", "ping", "navButton", w.action_route_monitor))
         # Discovery opens the LLDP/CDP window straight away. Trace Path MTU is
         # on the grid's right-click menu; MTU is checked automatically.
         self.nav_discovery = self._tool_button("Discovery", "discovery", "navButton",
@@ -503,10 +504,17 @@ class Dashboard(QWidget):
         footer.setVerticalSpacing(2)
         self.connection_dot = label("●", "dotOnline")
         self.connection_state = label("Live", "strong")
+        self.version_label = label(f"v{__version__}", "muted")
+        self.version_label.setToolTip(f"NetInfoView {__version__}")
         self.computer_name = ElidedLabel(computer_name())
         self.connection_ip = label("", "muted")
         footer.addWidget(self.connection_dot, 0, 0)
-        footer.addWidget(self.connection_state, 0, 1)
+        state_row = QHBoxLayout()
+        state_row.setSpacing(6)
+        state_row.addWidget(self.connection_state)
+        state_row.addWidget(self.version_label)
+        state_row.addStretch(1)
+        footer.addLayout(state_row, 0, 1)
         footer.addWidget(self.computer_name, 1, 1)
         footer.addWidget(self.connection_ip, 2, 1)
         footer.setColumnStretch(1, 1)

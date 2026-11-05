@@ -5,7 +5,7 @@ lookup since whois takes a second or two."""
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QCoreApplication, Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QFormLayout,
@@ -23,6 +23,7 @@ from . import fonts
 from ..ping import dns_ptr, whois
 from ..ping.mtu import format_mtu
 from ..ping.tracepath import Hop
+from .threads import retire, track
 
 
 class HopDetailsThread(QThread):
@@ -92,6 +93,7 @@ class HopDetailsWindow(QWidget):
         self._thread: HopDetailsThread | None = HopDetailsThread(hop.address)
         self._thread.details_ready.connect(self.show_details)
         self._thread.finished.connect(self._on_finished)
+        track(self._thread)
         self._thread.start()
 
     @staticmethod
@@ -141,6 +143,5 @@ class HopDetailsWindow(QWidget):
             # the app (as TracepathWindow does with its trace).
             thread.details_ready.disconnect()
             thread.finished.disconnect()
-            thread.setParent(QCoreApplication.instance())
-            thread.finished.connect(thread.deleteLater)
+            retire(thread)
         super().closeEvent(event)

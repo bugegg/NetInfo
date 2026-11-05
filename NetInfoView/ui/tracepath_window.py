@@ -6,7 +6,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from PyQt6.QtCore import QCoreApplication, QLocale, Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QLocale, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QBrush, QColor, QIcon
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -23,6 +23,7 @@ from ..ping import hostname, whois
 from .hop_details_window import HopDetailsWindow
 from ..ping.mtu import format_mtu
 from ..ping.tracepath import Hop, trace
+from .threads import retire, track
 
 COLUMNS = ("Hop", "Address", "Name", "Path MTU", "Country", "Note")
 NAME_COLUMN = 2
@@ -164,6 +165,7 @@ class TracepathWindow(QWidget):
         self._thread = thread
         self.status.setText(f"Tracing path MTU to {self._ip}...")
         self.button.setText("Stop")
+        track(thread)
         thread.start()
 
     def add_hop(self, hop: Hop) -> None:
@@ -243,6 +245,5 @@ class TracepathWindow(QWidget):
             thread.finished.disconnect()
             # Qt mustn't destroy a running QThread along with this window:
             # hand it to the app, which deletes it once it has finished.
-            thread.setParent(QCoreApplication.instance())
-            thread.finished.connect(thread.deleteLater)
+            retire(thread)
         super().closeEvent(event)
