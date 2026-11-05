@@ -705,16 +705,17 @@ class MainWindow(QMainWindow):
         window.activateWindow()
         return window
 
-    def net_path(self) -> NetPathWindow | None:
-        """Net Path to the first selected host, in a window of its own."""
+    def net_path(self) -> NetPathWindow:
+        """Net Path to the first selected host, in a window of its own, or
+        waiting for a target to be typed if none is selected."""
         entry = next((e for e in self._selected_entries() if e.ip_address), None)
-        if entry is None:
-            self.statusBar().showMessage("Select a host with an IP address to map its path", 3000)
-            return None
         from .dashboard import computer_name
         _, address = self._dashboard._network_text()
-        window = NetPathWindow(entry.display_name, entry.ip_address, self,
-                               source=(computer_name(), address))
+        source = (computer_name(), address)
+        if entry is None:
+            window = NetPathWindow(parent=self, source=source)
+        else:
+            window = NetPathWindow(entry.display_name, entry.ip_address, self, source=source)
         window.show()
         window.raise_()
         window.activateWindow()

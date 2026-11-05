@@ -169,7 +169,9 @@ def test_net_path_opens_from_the_main_window(window, monkeypatch):
     from NetInfoView.ui import netpath_window
 
     monkeypatch.setattr(netpath_window.NetPathWindow, "start", lambda self: None)
-    assert window.net_path() is None  # nothing selected
+    empty = window.net_path()  # nothing selected: waits for a target
+    assert empty.target.text() == "" and empty.button.text() == "Trace Now"
+    empty.close()
     entries = _entries_with_statuses(window, "8.8.8.8")
     entries[0].ip_address = "8.8.8.8"  # as once it has been resolved
     window._table.selectRow(0)
@@ -435,4 +437,54 @@ def test_the_main_route_is_bold_and_the_others_faint(qapp, monkeypatch):
              if window.details_grid.itemAtPosition(r, 1) is not None]
     assert any(t.startswith("3 of 4 probe flows took all of it") and "2: 10.0.1.1" in t
                for t in texts)
+    window.close()
+
+
+def test_target_box_start_stop_and_a_new_target_starts_over(qapp, monkeypatch):
+    from PyQt6.QtWidgets import QApplication
+    from NetInfoView.ping.netpath import Answer, Sweep
+    from NetInfoView.ui import netpath_window as nw
+
+    monkeypatch.setattr(nw, "resolve", lambda target: "1.1.1.1" if target == "one.one" else target)
+    probe = lambda ip, ttl, flows: {}
+    window = nw.NetPathWindow(probe=probe, live=False)
+    # Nothing to trace yet: waits for a target.
+    assert window._thread is None and window.button.text() == "Trace Now"
+    assert "Type a host name" in window.status.text() and window.health.text() == "Stopped"
+
+    window.target.setText("8.8.8.8")
+    window.button.click()
+    assert window._thread is not None and window.button.text() == "Stop"
+    window.button.click()  # Stop
+    assert window._thread is None and window.button.text() == "Trace Now"
+    assert window.status.text().startswith("Stopped")
+
+    window.add_sweep(Sweep(0, 1, [[Answer("8.8.8.8", 5, reached=True)]]))
+    window.target.setText("one.one")
+    window.target.returnPressed.emit()
+    assert window.sweeps == [] and window.heading.text() == "one.one"
+    assert window.windowTitle() == "Net Path - one.one"
+    thread = window._thread
+    assert thread.wait(5000)
+    QApplication.processEvents()
+    assert window._ip == "1.1.1.1" and "Destination: 1.1.1.1" in window.route_text.text()
+    assert window.button.text() == "Trace Now"
+    window.close()
+
+
+def test_a_target_that_cannot_be_found_says_so(qapp, monkeypatch):
+    from PyQt6.QtWidgets import QApplication
+    from NetInfoView.ui import netpath_window as nw
+
+    def fail(target):
+        raise OSError("nodename nor servname provided")
+
+    monkeypatch.setattr(nw, "resolve", fail)
+    window = nw.NetPathWindow("nowhere.invalid", "nowhere.invalid", live=False,
+                              probe=lambda ip, ttl, flows: {})
+    assert window._thread.wait(5000)
+    QApplication.processEvents()
+    assert window._thread is None and window.button.text() == "Trace Now"
+    assert window.status.text().startswith("Can't trace nowhere.invalid")
+    assert window.health.text() == "Stopped" and window.sweeps == []
     window.close()
