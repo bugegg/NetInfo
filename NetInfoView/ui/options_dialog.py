@@ -110,6 +110,14 @@ class OptionsDialog(QDialog):
         self._max_accumulated.setRange(100, 10000000)
         self._max_accumulated.setValue(settings.max_accumulated_pings)
 
+        self._route_keep_days = QSpinBox()
+        self._route_keep_days.setRange(1, 3650)
+        self._route_keep_days.setSuffix(" days")
+        self._route_keep_days.setValue(settings.route_log_keep_days)
+        self._route_keep_days.setToolTip(
+            "Ping Monitor's log files older than this are deleted when a Ping Monitor opens."
+        )
+
         ping_box = QGroupBox("Ping")
         ping_form = QFormLayout(ping_box)
         ping_form.addRow("Ping every:", self._interval)
@@ -130,6 +138,10 @@ class OptionsDialog(QDialog):
         advanced_form.addRow("SNMP community:", self._snmp_community)
         advanced_form.addRow("Keep at most (lower pane):", self._max_accumulated)
 
+        route_box = QGroupBox("Ping Monitor")
+        route_form = QFormLayout(route_box)
+        route_form.addRow("Keep logs for:", self._route_keep_days)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -139,6 +151,7 @@ class OptionsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(ping_box)
         layout.addWidget(advanced_box)
+        layout.addWidget(route_box)
         layout.addWidget(buttons)
 
     def result_settings(self) -> Settings:
@@ -159,5 +172,6 @@ class OptionsDialog(QDialog):
             snmp_community=self._snmp_community.text(),
             snmp_arp_auto=self._snmp_arp_auto.isChecked(),
             max_accumulated_pings=self._max_accumulated.value(),
+            route_log_keep_days=self._route_keep_days.value(),
         )
         return updated.sanitised()

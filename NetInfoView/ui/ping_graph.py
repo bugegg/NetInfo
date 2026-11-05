@@ -264,6 +264,20 @@ class PingGraphWidget(_TimeAxisWidget):
         self.setMinimumSize(420, 16)
         self.setMouseTracking(True)
         self._hover_x: float | None = None
+        #: Where the amber and red bands start, in ms.
+        self.warn_ms = WARN_MS
+        self.bad_ms = BAD_MS
+        #: (fine, warning, bad) band colours.
+        self.band_colors = (GOOD_COLOR, WARN_COLOR, BAD_COLOR)
+        #: The other colours, so a window can restyle its graph.
+        self.line_color = LINE_COLOR
+        self.line_width = 1.4
+        self.loss_color = LOSS_COLOR
+        self.loss_line_color = LOSS_COLOR.darker(130)
+        self.grid_color = GRID_COLOR
+        self.frame_color = QColor("#888888")
+        #: Greys out the time before the first ping; None leaves the bands.
+        self.no_data_color: QColor | None = NO_DATA_COLOR
 
     # -- geometry ------------------------------------------------------------
 
@@ -298,26 +312,30 @@ class PingGraphWidget(_TimeAxisWidget):
         self._paint_loss_percent(painter, plot)
         self._paint_hover(painter, plot, top_ms)
 
-        painter.setPen(QPen(QColor("#888888"), 1))
+        painter.setPen(QPen(self.frame_color, 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(plot)
         painter.end()
 
     def _paint_bands(self, painter: QPainter, plot: QRectF, top_ms: float) -> None:
-        painter.fillRect(plot, GOOD_COLOR)
-        for low, high, color in ((WARN_MS, BAD_MS, WARN_COLOR), (BAD_MS, top_ms, BAD_COLOR)):
+        good, warn, bad = self.band_colors
+        painter.fillRect(plot, good)
+        for low, high, color in ((self.warn_ms, self.bad_ms, warn),
+                                 (self.bad_ms, top_ms, bad)):
             if top_ms <= low:
                 continue
             y_low = self._y_for(low, top_ms, plot)
             y_high = self._y_for(min(high, top_ms), top_ms, plot)
             painter.fillRect(QRectF(plot.left(), y_high, plot.width(), y_low - y_high), color)
         # Grey out the part of the span before this host's first ping.
+        if self.no_data_color is None:
+            return
         first = self.first_seen if self.first_seen is not None else self._end
         x_first = min(plot.right(), self._x_for(first, plot))
         if x_first > plot.left():
             painter.fillRect(
                 QRectF(plot.left(), plot.top(), x_first - plot.left(), plot.height()),
-                NO_DATA_COLOR,
+                self.no_data_color,
             )
 
     def _paint_grid(self, painter: QPainter, plot: QRectF, top_ms: float) -> None:
@@ -331,7 +349,7 @@ class PingGraphWidget(_TimeAxisWidget):
             ms = top_ms * i / steps
             y = self._y_for(ms, top_ms, plot)
             if 0 < i < steps:
-                painter.setPen(QPen(GRID_COLOR, 1, Qt.PenStyle.DashLine))
+                painter.setPen(QPen(self.grid_color, 1, Qt.PenStyle.DashLine))
                 painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y))
             painter.setPen(self.palette().color(self.foregroundRole()))
             painter.drawText(
@@ -340,7 +358,7 @@ class PingGraphWidget(_TimeAxisWidget):
                 f"{ms:g}",
             )
         self._draw_rotated(painter, QPointF(8, plot.center().y()), "ms")
-        painter.setPen(LOSS_COLOR)
+        painter.setPen(self.loss_color)
         painter.drawText(
             QRectF(plot.right() + 3, plot.top() - 2, MARGIN_RIGHT - 3, 16),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
@@ -360,7 +378,7 @@ class PingGraphWidget(_TimeAxisWidget):
             x = self._x_for(sample.timestamp, plot)
             if plot.left() <= x <= plot.right():
                 painter.fillRect(
-                    QRectF(x - width / 2, plot.top(), width, plot.height()), LOSS_COLOR
+                    QRectF(x - width / 2, plot.top(), width, plot.height()), self.loss_color
                 )
 
     def _paint_line(self, painter: QPainter, plot: QRectF, top_ms: float) -> None:
@@ -386,7 +404,7 @@ class PingGraphWidget(_TimeAxisWidget):
             path.lineTo(min(plot.right(), x + step), y)
             pen_down = True
             previous = sample
-        painter.setPen(QPen(LINE_COLOR, 1.4))
+        painter.setPen(QPen(self.line_color, self.line_width))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setClipRect(plot)
         painter.drawPath(path)
@@ -406,7 +424,7 @@ class PingGraphWidget(_TimeAxisWidget):
                 # Steps, like the latency line: the level changes at a ping.
                 path.lineTo(x, path.currentPosition().y())
                 path.lineTo(x, y)
-        painter.setPen(QPen(LOSS_COLOR.darker(130), 1.2))
+        painter.setPen(QPen(self.loss_line_color, 1.2))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setClipRect(plot)
         painter.drawPath(path)
@@ -431,7 +449,7 @@ class PingGraphWidget(_TimeAxisWidget):
         painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()))
         if sample.rtt_ms is not None:
             y = self._y_for(sample.rtt_ms, top_ms, plot)
-            painter.setBrush(LINE_COLOR)
+            painter.setBrush(self.line_color)
             painter.drawEllipse(QPointF(x, y), 3, 3)
 
     # -- hover -------------------------------------------------------------------

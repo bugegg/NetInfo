@@ -4,7 +4,7 @@ and VLAN it is plugged into (ping/lldp_cdp.py)."""
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QCoreApplication, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -22,6 +22,7 @@ from . import fonts
 from ..ping import arp
 from ..ping.lldp_cdp import DEFAULT_LISTEN_SECONDS, Neighbor, capture_unavailable, listen
 from ..ping.network_interfaces import ethernet_interfaces
+from .threads import retire, track
 
 #: Dot colours in the status panel.
 GOOD, BAD, IDLE = "#2e9d3a", "#d0352b", "#8a8a8a"
@@ -217,6 +218,7 @@ class LldpCdpWindow(QWidget):
         self.button.setEnabled(True)
         self._tick.start()
         self._show_progress()
+        track(thread)
         thread.start()
 
     def add_neighbor(self, neighbor: Neighbor) -> None:
@@ -292,6 +294,5 @@ class LldpCdpWindow(QWidget):
             thread.error.disconnect()
             thread.finished.disconnect()
             # As in TracepathWindow: let the app delete it once it finishes.
-            thread.setParent(QCoreApplication.instance())
-            thread.finished.connect(thread.deleteLater)
+            retire(thread)
         super().closeEvent(event)

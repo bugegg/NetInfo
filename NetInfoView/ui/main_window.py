@@ -55,6 +55,7 @@ from .engine_thread import EngineThread
 from .network_select_dialog import NetworkSelectDialog
 from .options_dialog import OptionsDialog
 from .netpath_window import NetPathThread, NetPathWindow
+from .route_monitor_window import RouteMonitorWindow
 from .tracepath_window import TracepathThread, TracepathWindow
 from .ping_graph import PingGraphWindow
 from .vendor_update_thread import VendorUpdateThread
@@ -303,6 +304,13 @@ class MainWindow(QMainWindow):
         )
         self.action_net_path.triggered.connect(self.net_path)
 
+        self.action_route_monitor = QAction("Ping &Monitor", self)
+        self.action_route_monitor.setShortcut(QKeySequence("Ctrl+R"))
+        self.action_route_monitor.setToolTip(
+            "Ping every hop on the way to the selected host over time, logged and graphed"
+        )
+        self.action_route_monitor.triggered.connect(self.route_monitor)
+
         self.action_lldp_cdp = QAction(
             self._icon(sp.SP_DriveNetIcon), "Check &LLDP/CDP", self
         )
@@ -392,6 +400,7 @@ class MainWindow(QMainWindow):
         self._table.addAction(self.action_graph)
         self._table.addAction(self.action_trace_mtu)
         self._table.addAction(self.action_net_path)
+        self._table.addAction(self.action_route_monitor)
         self._add_table_separator()
 
         self._table.addAction(self.action_remove)
@@ -706,6 +715,19 @@ class MainWindow(QMainWindow):
         _, address = self._dashboard._network_text()
         window = NetPathWindow(entry.display_name, entry.ip_address, self,
                                source=(computer_name(), address))
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        return window
+
+    def route_monitor(self) -> RouteMonitorWindow:
+        """Ping Monitor (ui/route_monitor_window.py) in a window of its own, aimed at the first selected
+        host, or waiting for a target to be typed if none is selected."""
+        entry = next((e for e in self._selected_entries() if e.ip_address), None)
+        if entry is None:
+            window = RouteMonitorWindow(parent=self)
+        else:
+            window = RouteMonitorWindow(entry.ip_address, entry.display_name, self)
         window.show()
         window.raise_()
         window.activateWindow()

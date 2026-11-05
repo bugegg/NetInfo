@@ -72,6 +72,16 @@ class Settings:
     font_family: str = ""
     font_size: int = 0
 
+    # -- route monitor colours ------------------------------------------------
+    #: Latency (ms) and packet loss (%) from which a hop is Warning / Critical
+    #: in Route Monitor: Net Path's thresholds (ping/netpath.py). Loss 0 is off.
+    route_latency_warn_ms: float = 25.0
+    route_latency_crit_ms: float = 100.0
+    route_loss_warn_percent: float = 5.0
+    route_loss_crit_percent: float = 10.0
+    #: Route Monitor log files older than this many days are deleted.
+    route_log_keep_days: int = 30
+
     # -- lower pane ----------------------------------------------------------
     history_mode: HistoryMode = HistoryMode.ALL
     max_accumulated_pings: int = 50000
@@ -95,6 +105,14 @@ class Settings:
         self.max_concurrent_pings = max(1, int(self.max_concurrent_pings))
         self.stop_after_pings = max(0, int(self.stop_after_pings))
         self.max_accumulated_pings = max(100, int(self.max_accumulated_pings))
+        self.route_log_keep_days = min(3650, max(1, int(self.route_log_keep_days)))
+        self.route_latency_warn_ms = max(1.0, float(self.route_latency_warn_ms))
+        self.route_latency_crit_ms = max(self.route_latency_warn_ms + 1,
+                                         float(self.route_latency_crit_ms))
+        self.route_loss_warn_percent = min(100.0, max(0.0, float(self.route_loss_warn_percent)))
+        self.route_loss_crit_percent = min(100.0, max(0.0, float(self.route_loss_crit_percent)))
+        if self.route_loss_crit_percent and self.route_loss_crit_percent < self.route_loss_warn_percent:
+            self.route_loss_crit_percent = self.route_loss_warn_percent
         return self
 
     # -- persistence ---------------------------------------------------------

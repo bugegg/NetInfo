@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from itertools import pairwise
 
-from PyQt6.QtCore import QCoreApplication, QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QGraphicsItem, QGraphicsObject, QGraphicsScene, QGraphicsView,
@@ -20,6 +20,7 @@ from ..ping import hostname, netpath, whois
 from ..ping.netpath import DESTINATION, SOURCE, PathGraph, Sweep
 from ..ping.netpath_tcp import DEFAULT_PORT, UNHEARD, TcpProber, TcpUnavailable
 from .tracepath_window import country_flag, country_label
+from .threads import retire, track
 
 #: Seconds between traces while Live is on.
 LIVE_INTERVAL = 15
@@ -111,7 +112,9 @@ class NetPathThread(QThread):
                 if not self.live:
                     break
         finally:
-            self._lookups.shutdown(wait=True, cancel_futures=True)
+            self._lookups.shutdown(wait=False, cancel_futures=True)
+            # A lookup still out (a reverse lookup can take seconds) finishes
+            # on its own; stopping needn't wait for it.
 
     def _look_up(self, result: Sweep) -> None:
         for route in result.routes:
@@ -533,6 +536,7 @@ class NetPathWindow(QWidget):
         thread.finished.connect(self._on_finished)
         self._thread = thread
         self.button.setEnabled(False)
+        track(thread)
         thread.start()
 
     def probe_port(self) -> int | None:
@@ -601,8 +605,7 @@ class NetPathWindow(QWidget):
                            thread.finished):
                 signal.disconnect()
             # Qt mustn't destroy a running QThread along with this window.
-            thread.setParent(QCoreApplication.instance())
-            thread.finished.connect(thread.deleteLater)
+            retire(thread)
         self.button.setEnabled(True)
 
     def _on_live(self, on: bool) -> None:
