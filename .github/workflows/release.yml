@@ -91,7 +91,7 @@ jobs:
         # Same network-dependent test as on macOS; tests of macOS-only code
         # are skipped by tests/conftest.py.
         run: >
-          .venv\Scripts\python -X faulthandler -m pytest -v
+          .venv\Scripts\python -m pytest -q
           --deselect tests/test_port_scan.py::test_scan_many_handles_multiple_hosts_independently
 
       - name: Install Inno Setup

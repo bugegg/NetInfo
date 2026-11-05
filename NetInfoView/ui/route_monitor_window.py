@@ -26,7 +26,7 @@ from ..ping import hostname, netpath, whois
 from ..settings import Settings
 from ..ping.route_monitor import RoundProbe, RouteChange, RouteTracker, default_round_probe, resolve
 from .netpath_window import AMBER, GREEN, LEVEL_FILLS, LEVEL_TEXT, RED
-from .ping_graph import LOSS_COLOR, PingGraphWidget
+from .ping_graph import LOSS_COLOR, PingGraphWidget, local_time
 from .threads import retire, track
 
 #: (label, seconds) choices for how often every hop is pinged.
@@ -943,7 +943,7 @@ class RouteMonitorWindow(QWidget):
         elif self.log.hop_count is None:
             parts.append(f"{self.session_target} hasn't answered yet; showing the hops that did.")
         if self.log.started is not None:
-            started = time.strftime("%d %b %Y %H:%M:%S", time.localtime(self.log.started))
+            started = time.strftime("%d %b %Y %H:%M:%S", local_time(self.log.started))
             parts.append(f"Session {self.session_target} · started {started}")
         if self.log_file is not None:
             parts.append(f"Log: {self.log_file}")
@@ -1171,4 +1171,4 @@ def graph_legend_html() -> str:
 
 
 def _clock(stamp: float) -> str:
-    return time.strftime("%H:%M:%S", time.localtime(stamp))
+    return time.strftime("%H:%M:%S", local_time(stamp))

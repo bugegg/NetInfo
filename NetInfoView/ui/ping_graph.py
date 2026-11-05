@@ -162,7 +162,8 @@ class _TimeAxisWidget(QWidget):
             (s for s in (5, 10, 15, 30, 60, 120, 300, 600, 900, 1800) if s >= raw), 3600
         )
         fmt = "%H:%M:%S" if step < 60 else "%H:%M"
-        first = (int(self._start()) // step + 1) * step
+        # No ticks before 1970: Windows can't give a local time for them.
+        first = max(0, (int(self._start()) // step + 1) * step)
         for stamp in range(first, int(self._end) + 1, step):
             x = self._x_for(stamp, plot)
             painter.setPen(QPen(GRID_COLOR, 1))
@@ -173,7 +174,7 @@ class _TimeAxisWidget(QWidget):
             painter.drawText(
                 QRectF(x - 40, plot.bottom() + 3, 80, MARGIN_BOTTOM - 3),
                 Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
-                time.strftime(fmt, time.localtime(stamp)),
+                time.strftime(fmt, local_time(stamp)),
             )
 
     def _draw_rotated(self, painter: QPainter, center: QPointF, text: str) -> None:
@@ -462,7 +463,7 @@ class PingGraphWidget(_TimeAxisWidget):
         if sample is None:
             QToolTip.hideText()
         else:
-            when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(sample.timestamp))
+            when = time.strftime("%Y-%m-%d %H:%M:%S", local_time(sample.timestamp))
             value = "Lost" if sample.rtt_ms is None else f"{sample.rtt_ms:.1f} ms"
             QToolTip.showText(event.globalPosition().toPoint(), f"{when}\n{value}", self)
         self.update()
@@ -793,5 +794,14 @@ def _ms(value: float | None) -> str:
     return "-" if value is None else f"{value:.0f}"
 
 
+def local_time(stamp: float) -> time.struct_time:
+    """time.localtime, but never raising: on Windows it raises OSError for a
+    time before 1970, and an exception in a paint event ends the app."""
+    try:
+        return time.localtime(stamp)
+    except (OSError, OverflowError, ValueError):
+        return time.localtime(0)
+
+
 def _clock(stamp: float) -> str:
-    return time.strftime("%H:%M:%S", time.localtime(stamp))
+    return time.strftime("%H:%M:%S", local_time(stamp))
