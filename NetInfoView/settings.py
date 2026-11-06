@@ -62,6 +62,8 @@ class Settings:
     #: network, so no router has to be configured.
     snmp_arp_auto: bool = True
     snmp_community: str = "public"
+    #: The user name last used for SSH from the right-click menu.
+    ssh_username: str = ""
 
     # -- grid ----------------------------------------------------------------
     display_mode: DisplayMode = DisplayMode.ALL

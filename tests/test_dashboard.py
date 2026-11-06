@@ -1,4 +1,5 @@
 """Interaction coverage for the redesigned monitoring shell."""
+import pytest
 from test_main_window import window, qapp, _entries_with_statuses
 from NetInfoView.ping.result import PingResult, PingStatus
 from NetInfoView.settings import DisplayMode
@@ -211,6 +212,7 @@ def test_right_click_menu_keeps_only_host_actions_and_view_toggles(window):
         window.action_properties.text(), window.action_graph.text(),
         window.action_trace_mtu.text(), window.action_net_path.text(),
         window.action_route_monitor.text(),
+        window.action_ssh.text(), window.action_telnet.text(), window.action_snmp_test.text(),
         window.action_remove.text(), window.action_clear_all.text(),
         window.action_dark.text(), window.action_autosize.text(), window.action_about.text(),
     ]
@@ -278,9 +280,46 @@ def test_sidebar_footer_shows_live_computer_name_and_ip(window, monkeypatch):
     d = window._dashboard
     monkeypatch.setattr(d, "_network_text", lambda: ("Local network", "10.0.0.5"))
     d.refresh()
-    assert d.connection_state.text() == "Live"
+    assert d.connection_state.text() == "Go Live!"
     assert d.connection_ip.text() == "10.0.0.5"
     assert d.computer_name.text()
     monkeypatch.setattr(d, "_network_text", lambda: ("No network", ""))
     d.refresh()
     assert d.connection_state.text() == "Not connected"
+
+
+def test_latency_chart_span_can_be_picked(window):
+    from NetInfoView.ui.dashboard import CHART_RANGES
+
+    chart = window._dashboard.chart
+    assert chart.window_seconds == 60  # a minute, as before
+    assert [chart.range_combo.itemData(i) for i in range(chart.range_combo.count())] == [
+        seconds for _, seconds in CHART_RANGES
+    ]
+    chart.range_combo.setCurrentIndex(chart.range_combo.findData(1800))
+    assert chart.window_seconds == 1800
+    chart.resize(500, 220)
+    chart.grab()  # paints without raising
+
+
+def test_latency_chart_scrolls_back_through_history_and_no_further(window):
+    entries = _entries_with_statuses(window, '10.0.0.1\n10.0.0.2')
+    stopped = 1_000_000.0
+    window._stopped_at = stopped
+    for i in range(300):  # five minutes of pings
+        window._samples.add(entries[0].key, PingResult(
+            PingStatus.SUCCEEDED, rtt_ms=10, timestamp=stopped - 300 + i))
+    window._table.selectRow(0)
+    chart = window._dashboard.chart
+    chart.resize(500, 220)
+    chart.grab()
+    chart.scroll_by(120)
+    assert chart.offset == 120
+    chart.scroll_by(10_000)  # only as far as the oldest ping
+    assert chart.offset == pytest.approx(300 - 60)
+    chart.scroll_by(-10_000)
+    assert chart.offset == 0
+    chart.scroll_by(60)
+    window._table.selectRow(1)  # another host starts at now
+    chart.grab()
+    assert chart.offset == 0

@@ -16,8 +16,10 @@ unresponsive host can't serialise behind another.
 
 from __future__ import annotations
 
+import copy
 import ipaddress
 import socket
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
@@ -112,6 +114,7 @@ def resolve_batch(
     snmp_routers: list[str] | None = None,
     snmp_community: str = "public",
     snmp_auto: bool = False,
+    report: Callable[[list[DeviceInfoResult]], None] | None = None,
 ) -> list[DeviceInfoResult]:
     """Resolve device info for every job in the batch.
 
@@ -135,6 +138,11 @@ def resolve_batch(
     one walk per router for the whole batch (ping.snmp_arp). With
     ``snmp_auto`` the usual gateway addresses of each host's network are
     tried as well, after the configured ones.
+
+    ``report``, if given, is handed copies of the results so far after each
+    stage (MAC and vendor, which take milliseconds; names; ports), so the
+    caller can show what's known without waiting for the slowest stage.
+    Fields only ever go from empty to filled between reports.
     """
     results: dict[int, DeviceInfoResult] = {}
     hostname_jobs: dict[int, str] = {}
@@ -165,6 +173,23 @@ def resolve_batch(
             for key, ip in missing.items():
                 results[key].mac = found.get(ip, "")
 
+    for result in results.values():
+        if not result.mac:
+            continue
+        # A locally-administered MAC (e.g. a phone's "Private Wi-Fi address")
+        # was never assigned to any vendor, so skip the database entirely
+        # rather than report it as simply unknown.
+        if arp.is_locally_administered(result.mac):
+            result.vendor = PRIVATE_MAC_LABEL
+        else:
+            result.vendor = vendor_db.lookup(result.mac) or ""
+
+    def stage_done() -> None:
+        if report is not None:
+            report([copy.copy(result) for result in results.values()])
+
+    stage_done()  # MAC and vendor: everything so far came from local tables
+
     # Both name lookups share one pool: (key, which field) -> future.
     name_jobs = [(key, ip, "hostname", hostname_lookup.resolve)
                  for key, ip in hostname_jobs.items()]
@@ -187,16 +212,8 @@ def resolve_batch(
                     name = ""
                 setattr(results[key], field_name, name)
 
-    for result in results.values():
-        if not result.mac:
-            continue
-        # A locally-administered MAC (e.g. a phone's "Private Wi-Fi address")
-        # was never assigned to any vendor, so skip the database entirely
-        # rather than report it as simply unknown.
-        if arp.is_locally_administered(result.mac):
-            result.vendor = PRIVATE_MAC_LABEL
-        else:
-            result.vendor = vendor_db.lookup(result.mac) or ""
+    if name_jobs:
+        stage_done()
 
     if port_jobs:
         tcp_ports = ports.tcp if ports is not None else None

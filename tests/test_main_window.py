@@ -83,6 +83,20 @@ def test_device_info_sweep_skips_hosts_without_a_successful_ping(window, monkeyp
     assert resolved_ips == ["192.168.70.1"]
 
 
+def test_a_host_answering_for_the_first_time_is_looked_up_soon(window, monkeypatch):
+    """Not at the next 10 s device-info tick: a second or so after it answers."""
+    from NetInfoView.ui import main_window
+    entries = _entries_with_statuses(window, "192.168.70.1\n192.168.70.2\n")
+    ok = PingResult(PingStatus.SUCCEEDED, 5.0, "192.168.70.1", 64, "192.168.70.1")
+    assert not window._device_info_soon.isActive()
+    window._on_results([(entries[0].key, ok)])
+    assert window._device_info_soon.isActive()
+    assert window._device_info_soon.interval() == main_window.DEVICE_INFO_SOON_MS
+    window._device_info_soon.stop()
+    window._on_results([(entries[0].key, ok)])  # answered before: nothing new
+    assert not window._device_info_soon.isActive()
+
+
 def test_device_info_sweep_does_nothing_when_nothing_has_succeeded(window, monkeypatch):
     entries = _entries_with_statuses(window, "192.168.70.9 Dead\n")
     entries[0].apply(PingResult(PingStatus.TIMEOUT, destination_ip="192.168.70.9"))

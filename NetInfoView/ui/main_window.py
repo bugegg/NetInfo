@@ -19,6 +19,8 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFontDialog,
+    QInputDialog,
+    QLineEdit,
     QHeaderView,
     QLabel,
     QMainWindow,
@@ -38,7 +40,7 @@ from ..model.history import HistoryFilterProxy, HistoryModel, HistoryRecord
 from ..model.host import HostEntry
 from ..model.samples import SampleStore
 from ..model.table_model import HostFilterProxy, HostTableModel
-from ..ping import port_scan, snmp_arp
+from ..ping import port_scan, snmp, snmp_arp
 from ..ping.device_info import DeviceInfoJob
 from ..ping.engine import EngineOptions
 from ..ping.icmp import _IP_DONTFRAG
@@ -56,13 +58,19 @@ from .network_select_dialog import NetworkSelectDialog
 from .options_dialog import OptionsDialog
 from .netpath_window import NetPathThread, NetPathWindow
 from .route_monitor_window import RouteMonitorWindow
+from .snmp_test_window import SnmpTestWindow
 from .tracepath_window import TracepathThread, TracepathWindow
 from .ping_graph import PingGraphWindow
+from . import terminal
 from .vendor_update_thread import VendorUpdateThread
 
 #: How often a host with unresolved MAC/hostname/vendor is tried again. This
 #: doubles as the retry delay below, since each attempt lands on a tick.
 DEVICE_INFO_REFRESH_MS = 10000
+#: How soon after a host first answers its MAC, name and vendor are looked
+#: up, rather than at the next DEVICE_INFO_REFRESH_MS tick. Long enough for
+#: the rest of a network scan's first replies to arrive and share a sweep.
+DEVICE_INFO_SOON_MS = 1000
 #: One initial attempt plus this many retries (10s apart) before a host that
 #: still won't resolve is left alone for the rest of the session.
 DEVICE_INFO_MAX_RETRIES = 5
@@ -79,6 +87,7 @@ class MainWindow(QMainWindow):
         fonts.load()
         super().__init__()
         self.settings = settings
+        snmp.set_community(settings.snmp_community)
         self._keys = itertools.count(1)
         self._engine: EngineThread | None = None
         self._dont_fragment_supported = self._probe_dont_fragment_support()
@@ -143,6 +152,14 @@ class MainWindow(QMainWindow):
         self._device_info_timer.timeout.connect(self._refresh_device_info)
         self._device_info_timer.timeout.connect(self._auto_check_mtu)
         self._device_info_timer.start(DEVICE_INFO_REFRESH_MS)
+        #: Fires DEVICE_INFO_SOON_MS after a host first answers.
+        self._device_info_soon = QTimer(self)
+        self._device_info_soon.setSingleShot(True)
+        self._device_info_soon.timeout.connect(self._refresh_device_info)
+        #: Hosts that have answered at least once, and whether one did while
+        #: a sweep was running (it gets a sweep of its own straight after).
+        self._answered_keys: set[int] = set()
+        self._device_info_wanted = False
 
         # Only the packaged app can replace itself; running from source, the
         # check is left to the Check for Updates toolbar button.
@@ -304,6 +321,20 @@ class MainWindow(QMainWindow):
         )
         self.action_net_path.triggered.connect(self.net_path)
 
+        self.action_ssh = QAction("&SSH…", self)
+        self.action_ssh.setToolTip("Open an SSH session to the selected host in Terminal")
+        self.action_ssh.triggered.connect(self.open_ssh)
+
+        self.action_telnet = QAction("T&elnet", self)
+        self.action_telnet.setToolTip("Open a Telnet session to the selected host in Terminal")
+        self.action_telnet.triggered.connect(self.open_telnet)
+
+        self.action_snmp_test = QAction("Test SN&MP…", self)
+        self.action_snmp_test.setToolTip(
+            "Ask the selected host for its SNMP name and description, to check the community"
+        )
+        self.action_snmp_test.triggered.connect(self.test_snmp)
+
         self.action_route_monitor = QAction("Ping &Monitor", self)
         self.action_route_monitor.setShortcut(QKeySequence("Ctrl+R"))
         self.action_route_monitor.setToolTip(
@@ -401,6 +432,10 @@ class MainWindow(QMainWindow):
         self._table.addAction(self.action_trace_mtu)
         self._table.addAction(self.action_net_path)
         self._table.addAction(self.action_route_monitor)
+        self._add_table_separator()
+        self._table.addAction(self.action_ssh)
+        self._table.addAction(self.action_telnet)
+        self._table.addAction(self.action_snmp_test)
         self._add_table_separator()
 
         self._table.addAction(self.action_remove)
@@ -619,6 +654,7 @@ class MainWindow(QMainWindow):
         self._history.clear()
         self._forget_removed_hosts()
         self._device_info_attempts.clear()
+        self._answered_keys.clear()
         self._mtu_tried.clear()
 
     def set_selected_enabled(self, enabled: bool) -> None:
@@ -720,6 +756,68 @@ class MainWindow(QMainWindow):
         window.raise_()
         window.activateWindow()
         return window
+
+    def _terminal_target(self, what: str) -> str | None:
+        entry = next((e for e in self._selected_entries() if e.ip_address), None)
+        if entry is None:
+            self.statusBar().showMessage(f"Select a host with an IP address for {what}", 3000)
+            return None
+        return entry.ip_address
+
+    def open_ssh(self) -> None:
+        """SSH to the first selected host in Terminal, asking for the user
+        name (the last one used is filled in)."""
+        ip = self._terminal_target("SSH")
+        if ip is None:
+            return
+        username, ok = QInputDialog.getText(
+            self, "SSH", f"User name for {ip}:", QLineEdit.EchoMode.Normal,
+            self.settings.ssh_username,
+        )
+        username = username.strip()
+        if not ok:
+            return
+        if username and not terminal.valid_username(username):
+            QMessageBox.warning(self, "SSH", f"\"{username}\" is not a valid user name.")
+            return
+        if username != self.settings.ssh_username:
+            self.settings.ssh_username = username
+            self.settings.save()
+        terminal.open_in_terminal(terminal.ssh_command(ip, username))
+
+    def open_telnet(self) -> None:
+        """Telnet to the first selected host in Terminal."""
+        ip = self._terminal_target("Telnet")
+        if ip is not None:
+            terminal.open_in_terminal(terminal.telnet_command(ip))
+
+    def test_snmp(self) -> SnmpTestWindow:
+        """Test SNMP against the first selected host, with the community
+        from Settings filled in; the window can try others."""
+        entry = next((e for e in self._selected_entries() if e.ip_address), None)
+        window = SnmpTestWindow(
+            entry.ip_address if entry else "", self.settings.snmp_community, self,
+            saved_community=lambda: self.settings.snmp_community,
+            save_community=self._use_snmp_community,
+            answered=self._retry_device_info,
+        )
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        if entry is not None:
+            window.start()
+        return window
+
+    def _use_snmp_community(self, community: str) -> None:
+        self.settings.snmp_community = community
+        self.settings.save()
+        snmp.set_community(community)
+        self._retry_device_info()
+
+    def _retry_device_info(self) -> None:
+        """Give every host that ran out of tries for its name or MAC another
+        go, e.g. once SNMP has been switched on or its community fixed."""
+        self._device_info_attempts.clear()
 
     def route_monitor(self) -> RouteMonitorWindow:
         """Ping Monitor (ui/route_monitor_window.py) in a window of its own, aimed at the first selected
@@ -885,7 +983,11 @@ class MainWindow(QMainWindow):
 
     def _on_results(self, batch) -> None:
         records: list[HistoryRecord] = []
+        newly_answered = False
         for key, result in batch:
+            if result.succeeded and key not in self._answered_keys:
+                self._answered_keys.add(key)
+                newly_answered = True
             entry = self._model.entry_for_key(key)
             if entry is None:
                 continue
@@ -903,6 +1005,10 @@ class MainWindow(QMainWindow):
                     )
                 )
         self._model.apply_results(batch)
+        if newly_answered:
+            self._device_info_wanted = True
+            if not self._device_info_soon.isActive():
+                self._device_info_soon.start(DEVICE_INFO_SOON_MS)
         self._history.append_many(records)
         if records and self.settings.auto_scroll_history:
             self._history_view.scrollToBottom()
@@ -938,6 +1044,7 @@ class MainWindow(QMainWindow):
         """
         if self._device_info_thread is not None:
             return  # previous sweep still running; skip this tick, don't pile up
+        self._device_info_wanted = False
 
         custom_ports = port_scan.parse_ports(self.settings.port_scan_ports)
         scan_ports = bool(custom_ports)
@@ -1019,6 +1126,9 @@ class MainWindow(QMainWindow):
         thread, self._device_info_thread = self._device_info_thread, None
         if thread is not None:
             thread.wait(2000)
+        if self._device_info_wanted and not self._device_info_soon.isActive():
+            # A host first answered mid-sweep: look it up now, not next tick.
+            self._device_info_soon.start(0)
 
     # -- view options ------------------------------------------------------
 
@@ -1103,6 +1213,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         previous, self.settings = self.settings, dialog.result_settings()
+        snmp.set_community(self.settings.snmp_community)
         snmp_options = ("snmp_arp_routers", "snmp_community", "snmp_arp_auto")
         if any(getattr(previous, name) != getattr(self.settings, name) for name in snmp_options):
             # New routers to ask may find MACs for hosts that ran out of tries.

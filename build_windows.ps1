@@ -13,6 +13,19 @@ if (-not $match) { throw "No __version__ in NetInfoView\__init__.py" }
 $version = $match.Matches[0].Groups[1].Value
 
 Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
+
+# PuTTY's plink: SSH and Telnet from the right-click menu (MIT licence,
+# shipped beside it). Pinned, and checked against the SHA-256 in PuTTY's own
+# https://the.earth.li/~sgtatham/putty/<version>/sha256sums.
+$plinkVersion = "0.85"
+$plinkSha256 = "969f36879d5716aa1a9811f43a6a6510e8f08372dbeb9695b810b9c776f39c75"
+New-Item -ItemType Directory -Force build\putty | Out-Null
+Invoke-WebRequest "https://the.earth.li/~sgtatham/putty/$plinkVersion/w64/plink.exe" `
+    -OutFile build\putty\plink.exe
+$plinkHash = (Get-FileHash build\putty\plink.exe -Algorithm SHA256).Hash
+if ($plinkHash -ne $plinkSha256) { throw "plink.exe checksum mismatch: $plinkHash" }
+Copy-Item packaging\windows\PuTTY-LICENCE.txt build\putty\
+
 # Pillow lets PyInstaller turn the macOS .icns into the .exe's icon.
 .venv\Scripts\pyinstaller `
     --noconfirm `
@@ -24,6 +37,7 @@ Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
     --exclude-module pytest `
     --add-data "NetInfoView\fonts;NetInfoView\fonts" `
     --add-data "NetInfoView\flags;NetInfoView\flags" `
+    --add-data "build\putty;NetInfoView\putty" `
     packaging\launch.py
 if ($LASTEXITCODE) { throw "PyInstaller failed" }
 Remove-Item -Force NetInfoView.spec -ErrorAction SilentlyContinue

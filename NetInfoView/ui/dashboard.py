@@ -16,7 +16,7 @@ from PyQt6.QtGui import (
     QAction, QColor, QFont, QFontInfo, QPainter, QPainterPath, QPen,
 )
 from PyQt6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton,
+    QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton,
     QScrollArea, QSizePolicy, QSplitter, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget,
     QToolButton, QVBoxLayout, QWidget,
 )
@@ -264,23 +264,122 @@ def y_steps(ceiling: float) -> int:
 
 
 def x_intervals(width: float, label_width: float) -> int:
-    """How many equal slices of the 60 s window fit their time labels
-    side by side: 6 (every 10 s) when wide, down to 2 (every 30 s)."""
+    """How many equal slices of the chart's time span fit their time labels
+    side by side: 6 when wide, down to 2."""
     for intervals in (6, 4, 3, 2):
         if width / intervals >= label_width:
             return intervals
     return 1
 
 
-class LatencyChart(QWidget):
-    """The selected device's latency over the last 60 seconds."""
+#: The spans the latency chart can show, picked from its corner.
+CHART_RANGES = (
+    ("1 min", 60),
+    ("5 min", 300),
+    ("10 min", 600),
+    ("30 min", 1800),
+    ("60 min", 3600),
+)
 
-    WINDOW_SECONDS = 60
+
+class RangeCombo(QComboBox):
+    """A combo box styled as a small grey pill, with the up/down chevron that
+    a style sheet takes away drawn back in at its right end."""
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(self.palette().color(self.foregroundRole()), 1.4,
+                            Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        x, y = self.width() - 11.0, self.height() / 2
+        painter.drawPolyline([QPointF(x - 3, y - 2), QPointF(x, y - 5), QPointF(x + 3, y - 2)])
+        painter.drawPolyline([QPointF(x - 3, y + 2), QPointF(x, y + 5), QPointF(x + 3, y + 2)])
+
+
+class LatencyChart(QWidget):
+    """The selected device's latency over a chosen span (a minute at first)."""
 
     def __init__(self, window):
         super().__init__()
         self.window = window
         self.setMinimumSize(220, 120)
+        self.range_combo = RangeCombo(self)
+        self.range_combo.setToolTip("How far back the chart goes")
+        # A small box hugging its text and arrow (styled in apply_theme).
+        self.range_combo.setObjectName("chartRange")
+        self.range_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        for text, seconds in CHART_RANGES:
+            self.range_combo.addItem(text, seconds)
+        # The list is as narrow as the box; leave room for the tick and text.
+        metrics = self.range_combo.fontMetrics()
+        widest = max(metrics.horizontalAdvance(text) for text, _ in CHART_RANGES)
+        self.range_combo.view().setMinimumWidth(widest + 48)
+        self.range_combo.currentIndexChanged.connect(self.update)
+        #: How many seconds before now the chart ends: 0 follows now; drag
+        #: or swipe sideways to look back, double-click to come back.
+        self.offset = 0.0
+        self._drag: tuple[float, float] | None = None  # (mouse x, offset)
+        self._key = None  # the host shown, to start a new one at now
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setToolTip("Drag or swipe sideways to scroll back; double-click for now")
+
+    @property
+    def window_seconds(self) -> int:
+        return self.range_combo.currentData()
+
+    def _plot(self) -> QRectF:
+        return QRectF(44, 34, max(1, self.width() - 80), max(1, self.height() - 58))
+
+    def _latest_end(self) -> float:
+        return self.window._stopped_at or time.time()
+
+    def _max_offset(self) -> float:
+        """How far back there's history to show for the selected host."""
+        selected = self.window._selected_entries()
+        history = self.window._samples.samples(selected[0].key) if len(selected) == 1 else []
+        if not history:
+            return 0.0
+        return max(0.0, self._latest_end() - history[0].timestamp - self.window_seconds)
+
+    def scroll_by(self, seconds: float) -> None:
+        """Move the chart back (positive) or forward in time."""
+        self.offset = min(self._max_offset(), max(0.0, self.offset + seconds))
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag = (event.position().x(), self.offset)
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def mouseMoveEvent(self, event):
+        if self._drag is None:
+            return
+        x, offset = self._drag
+        moved = (event.position().x() - x) / self._plot().width() * self.window_seconds
+        self.offset = offset
+        self.scroll_by(moved)  # dragging right shows earlier pings
+
+    def mouseReleaseEvent(self, event):
+        self._drag = None
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+    def mouseDoubleClickEvent(self, event):
+        self.offset = 0.0
+        self.update()
+
+    def wheelEvent(self, event):
+        delta = event.pixelDelta()
+        dx = delta.x() if not delta.isNull() else event.angleDelta().x() / 8
+        if not dx:
+            event.ignore()
+            return
+        self.scroll_by(dx / self._plot().width() * self.window_seconds)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        hint = self.range_combo.sizeHint()
+        self.range_combo.setGeometry(self.width() - hint.width() - 8, 4, hint.width(), hint.height())
 
     def paintEvent(self, event):
         colors = theme_colors(self.window.settings.dark_background)
@@ -293,15 +392,18 @@ class LatencyChart(QWidget):
         painter.setPen(ink)
         painter.drawText(QRectF(12, 6, 200, 20), Qt.AlignmentFlag.AlignVCenter, "Latency (ms)")
         painter.setFont(self.font())
-        painter.setPen(muted)
-        painter.drawText(QRectF(0, 6, self.width() - 12, 20),
-                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "Last 60 seconds")
+        span = self.window_seconds
 
         selected = self.window._selected_entries()
-        end = self.window._stopped_at or time.time()
-        start = end - self.WINDOW_SECONDS
-        samples = self.window._samples.samples(selected[0].key, start) if len(selected) == 1 else []
-        plot = QRectF(44, 34, max(1, self.width() - 80), max(1, self.height() - 58))
+        key = selected[0].key if len(selected) == 1 else None
+        if key != self._key:
+            self._key, self.offset = key, 0.0
+        self.offset = min(self.offset, self._max_offset())
+        end = self._latest_end() - self.offset
+        start = end - span
+        samples = ([s for s in self.window._samples.samples(key, start) if s.timestamp <= end]
+                   if key is not None else [])
+        plot = self._plot()
         ceiling = nice_ceiling(max((s.rtt_ms or 0 for s in samples), default=10) * 1.15)
         steps = y_steps(ceiling)
         for i in range(steps + 1):
@@ -318,7 +420,7 @@ class LatencyChart(QWidget):
             painter.setPen(QPen(grid, 1))
             painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()))
             painter.setPen(muted)
-            stamp = datetime.fromtimestamp(start + self.WINDOW_SECONDS * i / intervals).strftime("%H:%M:%S")
+            stamp = datetime.fromtimestamp(start + span * i / intervals).strftime("%H:%M:%S")
             painter.drawText(QRectF(x - 40, plot.bottom() + 6, 80, 18), Qt.AlignmentFlag.AlignCenter, stamp)
         if not samples:
             painter.setPen(muted)
@@ -328,7 +430,7 @@ class LatencyChart(QWidget):
             return
 
         def point(sample):
-            x = plot.left() + (sample.timestamp - start) / self.WINDOW_SECONDS * plot.width()
+            x = plot.left() + (sample.timestamp - start) / span * plot.width()
             return QPointF(x, plot.bottom() - min(sample.rtt_ms, ceiling) / ceiling * plot.height())
 
         runs, run = [], []
@@ -337,7 +439,7 @@ class LatencyChart(QWidget):
                 if run:
                     runs.append(run)
                 run = []
-                x = plot.left() + (sample.timestamp - start) / self.WINDOW_SECONDS * plot.width()
+                x = plot.left() + (sample.timestamp - start) / span * plot.width()
                 painter.setPen(QPen(QColor(RED), 2))
                 painter.drawLine(QPointF(x, plot.bottom() - 8), QPointF(x, plot.bottom()))
             else:
@@ -357,10 +459,12 @@ class LatencyChart(QWidget):
             painter.fillPath(area, fill)
             painter.setPen(QPen(QColor(BLUE), 2))
             painter.drawPath(line)
-            painter.setBrush(QColor(BLUE))
-            painter.setPen(Qt.PenStyle.NoPen)
-            for p in points:
-                painter.drawEllipse(p, 2.6, 2.6)
+            # Dots only while they're spread out enough to tell apart.
+            if plot.width() / max(1, len(samples)) >= 6:
+                painter.setBrush(QColor(BLUE))
+                painter.setPen(Qt.PenStyle.NoPen)
+                for p in points:
+                    painter.drawEllipse(p, 2.6, 2.6)
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
 
@@ -503,7 +607,7 @@ class Dashboard(QWidget):
         footer.setHorizontalSpacing(10)
         footer.setVerticalSpacing(2)
         self.connection_dot = label("●", "dotOnline")
-        self.connection_state = label("Live", "strong")
+        self.connection_state = label("Go Live!", "strong")
         self.version_label = label(f"v{__version__}", "muted")
         self.version_label.setToolTip(f"NetInfoView {__version__}")
         self.computer_name = ElidedLabel(computer_name())
@@ -827,7 +931,7 @@ class Dashboard(QWidget):
 
         subtitle, ip = self._network_text()
         self.subtitle.setText(subtitle)
-        self.connection_state.setText("Live" if ip else "Not connected")
+        self.connection_state.setText("Go Live!" if ip else "Not connected")
         self.connection_ip.setText(ip)
         self.connection_dot.setObjectName("dotOnline" if ip else "dotOffline")
         self.connection_dot.style().polish(self.connection_dot)
@@ -907,6 +1011,8 @@ def apply_theme(window) -> None:
         QMenu::item {{ padding: 5px 18px 5px 18px; border-radius: 4px; }}
         QMenu::item:selected {{ background: {c['select']}; color: {c['selected_ink']}; }}
         QMenu::separator {{ height: 1px; background: {c['border']}; margin: 4px 8px; }}
+        QComboBox#chartRange {{ background: {c['hover']}; border: none; border-radius: 5px; padding: 2px 4px 2px 8px; }}
+        QComboBox#chartRange::drop-down {{ width: 16px; border: none; }}
         QLabel {{ background: transparent; }}
         QFrame#sidebar {{ background: {c['sidebar']}; border-right: 1px solid {c['border']}; }}
         QFrame#rule, QFrame#vrule {{ background: {c['border']}; }}
