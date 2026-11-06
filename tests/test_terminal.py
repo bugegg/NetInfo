@@ -133,3 +133,33 @@ def test_windows_script_runs_in_powershell():
     assert done.returncode == 0, done.stderr
     assert "hello from cmd" in done.stdout
     assert "Press any key" not in done.stdout  # succeeded: closes straight away
+
+
+def test_a_new_ssh_host_key_is_accepted_without_asking():
+    plink = r"C:\NetInfoView\plink.exe"
+    command = [plink, "-load", "NetInfoView", "-ssh", "-l", "admin", "10.0.0.3"]
+    script = terminal.windows_script(command, accept_new_host_key=True)
+    hidden, session = script.split("$started", 1)
+    # Answered from the pipe (plink would otherwise wait on the console).
+    assert "'y' | & 'C:\\NetInfoView\\plink.exe' '-legacy-stdio-prompts' '-load'" in hidden
+    assert "-legacy-stdio-prompts" not in session  # the session itself is interactive
+    assert "'y'" not in terminal.windows_script(command)  # known host: nothing answered
+
+
+def test_macos_ssh_accepts_new_host_keys_only(monkeypatch):
+    monkeypatch.setattr(terminal, "IS_WINDOWS", False)
+    assert "StrictHostKeyChecking=accept-new" in terminal.ssh_command("10.0.0.1")
+
+
+@pytest.mark.skipif(not terminal.IS_WINDOWS, reason="reads the Windows registry")
+def test_putty_knows_host_reads_the_cached_keys():
+    import winreg
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, terminal.PUTTY_HOST_KEYS) as key:
+        winreg.SetValueEx(key, "rsa2@22:192.0.2.77", 0, winreg.REG_SZ, "0x23,0x1")
+    try:
+        assert terminal.putty_knows_host("192.0.2.77")
+        assert not terminal.putty_knows_host("192.0.2.78")
+    finally:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, terminal.PUTTY_HOST_KEYS, 0,
+                            winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, "rsa2@22:192.0.2.77")

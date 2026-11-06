@@ -25,6 +25,9 @@ LEGACY_SSH_OPTIONS = (
     "-o", "HostKeyAlgorithms=+ssh-rsa",
     "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa",
     "-o", "Ciphers=+aes128-cbc,aes256-cbc,3des-cbc",
+    # A host never seen before is trusted and remembered without asking;
+    # one whose key has changed since is still refused, loudly.
+    "-o", "StrictHostKeyChecking=accept-new",
 )
 
 #: plink, shipped next to the app's other data by build_windows.ps1 (PuTTY,
@@ -50,6 +53,31 @@ def plink_path() -> str:
     if BUNDLED_PLINK.is_file():
         return str(BUNDLED_PLINK)
     return shutil.which("plink") or "plink"
+
+
+#: Where PuTTY keeps the host keys it has accepted: one value per key, named
+#: "<key type>@<port>:<host>".
+PUTTY_HOST_KEYS = r"Software\SimonTatham\PuTTY\SshHostKeys"
+
+
+def putty_knows_host(ip: str, port: int = 22) -> bool:
+    """True if PuTTY has a host key cached for `ip` (any key type)."""
+    import winreg
+
+    suffix = f"@{port}:{ip}"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, PUTTY_HOST_KEYS) as key:
+            index = 0
+            while True:
+                try:
+                    name = winreg.EnumValue(key, index)[0]
+                except OSError:
+                    return False
+                if name.endswith(suffix):
+                    return True
+                index += 1
+    except OSError:
+        return False
 
 
 def save_putty_session() -> None:
@@ -157,10 +185,20 @@ def _ps_quote(text: str) -> str:
     return "'" + text.replace("'", "''") + "'"
 
 
-def windows_script(command: list[str]) -> str:
+def windows_script(command: list[str], accept_new_host_key: bool = False) -> str:
     """A PowerShell script for a console window of its own: a hint when the
     program isn't installed, and a window that closes when the session
-    ends, unless it failed straight away (so the error can be read)."""
+    ends, unless it failed straight away (so the error can be read).
+
+    `accept_new_host_key` (plink SSH to a host PuTTY has no key for yet,
+    see putty_knows_host): first run plink once out of sight, answering
+    "y" to its "Store key in cache?", so the session itself starts without
+    asking, as OpenSSH's StrictHostKeyChecking=accept-new does. That run
+    stops at the login, its input used up. -legacy-stdio-prompts makes it
+    read that "y" from the pipe: plink otherwise reads answers from the
+    console itself, and would sit there waiting, unseen. Only a host with
+    no key at all is answered for; a key that has *changed* still gets
+    plink's warning, in the session itself."""
     program = command[0]
     name = PureWindowsPath(program).stem if program.lower().endswith(".exe") else program
     hint = _WINDOWS_HINTS.get(name, f"Install {name}.")
@@ -168,7 +206,10 @@ def windows_script(command: list[str]) -> str:
     return (
         f"if (-not (Get-Command {_ps_quote(program)} -ErrorAction SilentlyContinue)) {{ "
         f"Write-Host {_ps_quote(f'{name} is not installed. {hint}')}; {wait}; exit 1 }}; "
-        "$started = [Diagnostics.Stopwatch]::StartNew(); "
+        + (f"$null = ('y' | & {_ps_quote(program)} '-legacy-stdio-prompts' "
+           f"{' '.join(_ps_quote(word) for word in command[1:])} 2>&1); "
+           if accept_new_host_key else "")
+        + "$started = [Diagnostics.Stopwatch]::StartNew(); "
         f"& {' '.join(_ps_quote(word) for word in command)}; "
         f"if ($LASTEXITCODE -ne 0 -and $started.Elapsed.TotalSeconds -lt {QUICK_FAILURE_SECONDS}) "
         f"{{ {wait} }}"
@@ -182,8 +223,10 @@ def open_in_terminal(command: list[str]) -> None:
             save_putty_session()
         except OSError:
             pass  # plink still runs, only asking about old algorithms
+        ssh_ip = command[-1] if "-ssh" in command else ""
+        script = windows_script(command, accept_new_host_key=bool(ssh_ip) and not putty_knows_host(ssh_ip))
         subprocess.Popen(
-            ["powershell", "-NoLogo", "-NoProfile", "-Command", windows_script(command)],
+            ["powershell", "-NoLogo", "-NoProfile", "-Command", script],
             creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
         )
         return
