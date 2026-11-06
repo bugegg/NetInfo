@@ -82,15 +82,13 @@ DEFAULT_PORTS_TEXT = "\n".join(
 )
 
 CONNECT_TIMEOUT_SECONDS = 0.6
-#: UDP has no handshake to time out on cleanly, so it gets its own (slightly
-#: more generous) timeout rather than sharing the TCP one.
+#: How long a UDP port is given to reply to each of its two probes.
 UDP_TIMEOUT_SECONDS = 0.6
 #: TCP/UDP connects are cheap for the OS to have many in flight at once; this
 #: just keeps a full-range scan (a /24, say) from opening thousands of
 #: sockets at the same instant. Shared by the UDP jobs in the same sweep.
-#: UDP in particular almost always pays its full timeout (most services stay
-#: silent on an unsolicited empty probe rather than refusing it outright —
-#: see _check_udp_port), so with the default port list now covering 21
+#: UDP in particular often pays its full timeout (a silent port is asked
+#: twice — see _check_udp_port), so with the default port list now covering 21
 #: ports (14 TCP + 7 UDP) a low worker count turns into many sequential
 #: ~0.6s rounds for a sweep with more than a handful of hosts. 300 keeps a
 #: comfortable margin under __main__.py's raised file-descriptor limit
@@ -160,25 +158,16 @@ def _check_tcp_port(ip: str, port: int) -> bool:
 
 
 def _check_udp_port(ip: str, port: int) -> bool:
-    """Best-effort: a UDP probe gets no handshake, so "no reply" is reported
-    as open — that's how most UDP services treat an unsolicited empty
-    datagram — and only an explicit ICMP port-unreachable (surfaced by the
-    kernel as ConnectionRefusedError on a connected UDP socket) counts as a
-    confident "closed". Same not-a-fingerprint spirit as the rest of this
-    module.
+    """Open only if the port actually replies. Well-known services are sent
+    a request of their own kind (a DNS query to 53, NTP to 123, SNMP to 161,
+    SSDP M-SEARCH to 1900, ...), the same probes as the Port Scan window
+    (ping/port_scanner.py), so a working service answers; anything else gets
+    an empty datagram, twice. Silence is open|filtered there and not counted
+    here: a port that never answered can't be told apart from one a firewall
+    drops, and the grid shouldn't claim it's open.
     """
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.settimeout(UDP_TIMEOUT_SECONDS)
-            sock.connect((ip, port))
-            sock.send(b"")
-            try:
-                sock.recv(512)
-            except socket.timeout:
-                pass
-    except OSError:
-        return False
-    return True
+    from .port_scanner import OPEN, probe_udp
+    return probe_udp(ip, port, timeout=UDP_TIMEOUT_SECONDS * 2).state == OPEN
 
 
 def _sort_key(port: int | str) -> tuple[int, str]:

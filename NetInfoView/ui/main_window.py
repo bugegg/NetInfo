@@ -58,6 +58,8 @@ from .network_select_dialog import NetworkSelectDialog
 from .options_dialog import OptionsDialog
 from .netpath_window import NetPathThread, NetPathWindow
 from .route_monitor_window import RouteMonitorWindow
+from .port_scan_window import PortScanThread, PortScanWindow
+from .repeat_ping_window import RepeatPingThread, RepeatPingWindow
 from .snmp_test_window import SnmpTestWindow
 from .tracepath_window import TracepathThread, TracepathWindow
 from .ping_graph import PingGraphWindow
@@ -302,6 +304,14 @@ class MainWindow(QMainWindow):
         self.action_graph.setShortcut(QKeySequence("Ctrl+G"))
         self.action_graph.triggered.connect(self.show_graph)
 
+        self.action_repeat_ping = QAction("&Repeat Ping…", self)
+        self.action_repeat_ping.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        self.action_repeat_ping.setToolTip(
+            "Cisco-style ping … repeat: echoes back to back, thousands a second, "
+            "with size, DF bit, data pattern and sweep"
+        )
+        self.action_repeat_ping.triggered.connect(self.repeat_ping)
+
         self.action_check_mtu = QAction("Check &MTU", self)
         self.action_check_mtu.setToolTip(
             "Find the largest packet that reaches each selected host unfragmented"
@@ -334,6 +344,11 @@ class MainWindow(QMainWindow):
             "Ask the selected host for its SNMP name and description, to check the community"
         )
         self.action_snmp_test.triggered.connect(self.test_snmp)
+
+        self.action_port_scan = QAction("&Port Scan…", self)
+        self.action_port_scan.setShortcut(QKeySequence("Ctrl+P"))
+        self.action_port_scan.setToolTip("Find which TCP ports the selected host has open")
+        self.action_port_scan.triggered.connect(self.port_scan)
 
         self.action_route_monitor = QAction("Ping &Monitor", self)
         self.action_route_monitor.setShortcut(QKeySequence("Ctrl+R"))
@@ -429,6 +444,7 @@ class MainWindow(QMainWindow):
         """
         self._table.addAction(self.action_properties)
         self._table.addAction(self.action_graph)
+        self._table.addAction(self.action_repeat_ping)
         self._table.addAction(self.action_trace_mtu)
         self._table.addAction(self.action_net_path)
         self._table.addAction(self.action_route_monitor)
@@ -436,6 +452,7 @@ class MainWindow(QMainWindow):
         self._table.addAction(self.action_ssh)
         self._table.addAction(self.action_telnet)
         self._table.addAction(self.action_snmp_test)
+        self._table.addAction(self.action_port_scan)
         self._add_table_separator()
 
         self._table.addAction(self.action_remove)
@@ -801,6 +818,28 @@ class MainWindow(QMainWindow):
             save_community=self._use_snmp_community,
             answered=self._retry_device_info,
         )
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        if entry is not None:
+            window.start()
+        return window
+
+    def repeat_ping(self) -> RepeatPingWindow:
+        """Repeat Ping (Cisco style) to the first selected host, or waiting
+        for a target to be typed; it starts when Ping is pressed."""
+        entry = next((e for e in self._selected_entries() if e.ip_address), None)
+        window = RepeatPingWindow(entry.ip_address if entry else "", self)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        return window
+
+    def port_scan(self) -> PortScanWindow:
+        """Port Scan the first selected host (its common ports straight
+        away), or wait for a host to be typed if none is selected."""
+        entry = next((e for e in self._selected_entries() if e.ip_address), None)
+        window = PortScanWindow(entry.ip_address if entry else "", self)
         window.show()
         window.raise_()
         window.activateWindow()
@@ -1421,11 +1460,19 @@ class MainWindow(QMainWindow):
             window.close()
         for window in self.findChildren(LldpCdpWindow):
             window.close()
+        for window in self.findChildren(PortScanWindow):
+            window.close()
+        for window in self.findChildren(RepeatPingWindow):
+            window.close()
         for thread in QCoreApplication.instance().findChildren(TracepathThread):
             thread.wait(3000)
         for thread in QCoreApplication.instance().findChildren(NetPathThread):
             thread.wait(3000)
         for thread in QCoreApplication.instance().findChildren(LldpCdpThread):
+            thread.wait(3000)
+        for thread in QCoreApplication.instance().findChildren(PortScanThread):
+            thread.wait(3000)
+        for thread in QCoreApplication.instance().findChildren(RepeatPingThread):
             thread.wait(3000)
         self._vendor_db.close()
         self.settings.save()

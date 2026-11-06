@@ -140,7 +140,7 @@ class LldpCdpWindow(QWidget):
 
         self.text = QPlainTextEdit()
         self.text.setReadOnly(True)
-        self.text.setFont(fonts.mono())
+        fonts.use_mono(self.text)
         self.text.setPlaceholderText("Waiting for LLDP/CDP announcements...")
 
         self.progress = QProgressBar()

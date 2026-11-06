@@ -61,6 +61,15 @@ def mono(size_like: QFont | None = None) -> QFont:
     return QFont(cached)
 
 
+def use_mono(widget) -> None:
+    """Show `widget` in the monospaced font. setFont alone isn't enough: the
+    app stylesheet sets every QWidget's font-family (ui/dashboard.py
+    apply_theme), which wins over setFont; its QWidget[mono="true"] rule
+    picks this property up instead."""
+    widget.setFont(mono())
+    widget.setProperty("mono", True)
+
+
 def _build_mono(size_like: QFont | None) -> QFont:
     if load() and MONO_FAMILY in QFontDatabase.families():
         font = QFont(MONO_FAMILY)

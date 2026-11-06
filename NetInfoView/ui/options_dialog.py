@@ -53,7 +53,7 @@ class OptionsDialog(QDialog):
             self._dont_fragment.setChecked(False)
             self._dont_fragment.setEnabled(False)
             self._dont_fragment.setToolTip(
-                "macOS rejects IP_DONTFRAG on the unprivileged ICMP socket this app uses."
+                "This system rejected IP_DONTFRAG on the unprivileged ICMP socket this app uses."
             )
 
         self._stop_after = QSpinBox()

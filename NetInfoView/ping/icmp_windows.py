@@ -111,14 +111,16 @@ _INVALID_HANDLE = ctypes.c_void_p(-1).value
 
 
 def send_echo(
-    api: _IcmpApi, ip: str, timeout_ms: int, payload_size: int, ttl: int, dont_fragment: bool
+    api: _IcmpApi, ip: str, timeout_ms: int, payload_size: int, ttl: int, dont_fragment: bool,
+    data: bytes | None = None,
 ) -> PingResult:
-    """One blocking echo request; what IcmpWindowsPinger runs on a worker."""
+    """One blocking echo request; what IcmpWindowsPinger runs on a worker.
+    `data`, if given, is sent as the echo's data instead of the filler."""
     handle = api.create()
     if not handle or handle == _INVALID_HANDLE:
         return PingResult(PingStatus.NO_RESOURCES)
     try:
-        payload = _payload(payload_size)
+        payload = _payload(payload_size) if data is None else data
         options = IP_OPTION_INFORMATION(Ttl=ttl, Flags=IP_FLAG_DF if dont_fragment else 0)
         # Room for one reply, its echoed data, and an ICMP error's quoted header.
         reply_size = ctypes.sizeof(ICMP_ECHO_REPLY) + len(payload) + 8 + 64

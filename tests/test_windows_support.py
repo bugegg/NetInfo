@@ -344,3 +344,49 @@ def test_downloads_are_verified_by_the_operating_system():
     from NetInfoView.https import ssl_context
 
     assert isinstance(ssl_context(), truststore.SSLContext)
+
+
+# -- Repeat Ping on Windows ---------------------------------------------------
+
+
+def test_repeat_ping_sends_the_pattern_through_icmpsendecho(monkeypatch):
+    """WindowsEcho hands the IOS pattern data to send_echo (runs anywhere:
+    the iphlpapi calls are replaced)."""
+    from NetInfoView.ping import icmp_windows, repeat_ping
+    from NetInfoView.ping.result import PingResult
+
+    calls = []
+    monkeypatch.setattr(icmp_windows, "_IcmpApi", lambda: object())
+
+    def fake_send_echo(api, ip, timeout_ms, size, ttl, dont_fragment, data=None):
+        calls.append((ip, timeout_ms, size, dont_fragment, data))
+        return PingResult(PingStatus.SUCCEEDED, 1.0, ip, 64)
+
+    monkeypatch.setattr(icmp_windows, "send_echo", fake_send_echo)
+    chars = []
+    options = repeat_ping.RepeatOptions(count=3)
+    assert repeat_ping.run("10.0.0.1", options, lambda c, r, s: chars.append(c),
+                           echo_factory=repeat_ping.WindowsEcho)
+    assert chars == ["!", "!", "!"]
+    ip, timeout_ms, size, dont_fragment, data = calls[0]
+    assert (ip, timeout_ms, size, dont_fragment) == ("10.0.0.1", 2000, 72, False)
+    assert data == repeat_ping.payload(100, 0xABCD)
+
+
+@windows_only
+def test_real_repeat_ping_to_loopback_on_windows():
+    from NetInfoView.ping import repeat_ping
+
+    chars = []
+    assert repeat_ping.run("127.0.0.1", repeat_ping.RepeatOptions(count=50),
+                           lambda c, r, s: chars.append(c))
+    assert chars == ["!"] * 50
+
+
+@windows_only
+def test_send_echo_carries_the_given_data():
+    from NetInfoView.ping import icmp_windows
+
+    api = icmp_windows._IcmpApi()
+    result = icmp_windows.send_echo(api, "127.0.0.1", 2000, 8, 64, False, data=b"\xab\xcd" * 4)
+    assert result.status is PingStatus.SUCCEEDED
