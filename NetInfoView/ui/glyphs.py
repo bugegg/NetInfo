@@ -17,6 +17,7 @@ _PATHS = {
     "discovery": '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="2.5"/>',
     "netpath": '<circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="5" r="2.5"/>'
                '<circle cx="19" cy="19" r="2.5"/><path d="M7.5 12h2.5l6.5-6M10 12l6.5 6"/>',
+    "mtu": '<path d="M3 6h18M3 12h12M3 18h7"/><path d="m17 15 3 3-3 3"/>',
     "repeatping": '<path d="M3 12h4l2-5 3 10 2-5h7"/><path d="m18 9 3 3-3 3"/>',
     "portscan": '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10M12 16v4"/>'
                 '<path d="M7 8v4M10 8v4M14 8v4M17 8v4"/>',

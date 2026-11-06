@@ -482,8 +482,10 @@ There is no menu bar; everything else is in this menu.
   It also runs by itself on the device-info timer (every 10 s): each enabled
   host is checked once, after its first successful ping; the menu item
   re-checks on demand
-- Trace Path MTU — like Linux `tracepath`: opens a window listing every hop to
-  the first selected host (Hop · Address · Name · Path MTU · Note), to show
+- Trace Path MTU (also the sidebar's Trace Path MTU button) — like Linux
+  `tracepath`: opens a window listing every hop to the first selected host,
+  or with nothing selected an empty one with a Target field to type an
+  address or name into (Trace / Return starts it) (Hop · Address · Name · Path MTU · Note), to show
   where the MTU drops. Per hop it runs `/sbin/ping -D -m <ttl> -s <payload>`
   at the path MTU so far, starting from the outgoing interface's MTU (capped
   at 8212, as Check MTU); "Time to live exceeded" means

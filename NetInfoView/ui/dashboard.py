@@ -584,6 +584,10 @@ class Dashboard(QWidget):
         # Net Path maps the routes to the selected device.
         self.nav_net_path = self._tool_button("Net Path", "netpath", "navButton", w.action_net_path)
         nav.addWidget(self.nav_net_path)
+        # Trace Path MTU: where the path MTU drops on the way to a device.
+        self.nav_trace_mtu = self._tool_button("Trace Path MTU", "mtu", "navButton",
+                                               w.action_trace_mtu)
+        nav.addWidget(self.nav_trace_mtu)
         # Repeat Ping: Cisco-style ping … repeat to the selected device.
         self.nav_repeat_ping = self._tool_button("Repeat Ping", "repeatping", "navButton",
                                                  w.action_repeat_ping)

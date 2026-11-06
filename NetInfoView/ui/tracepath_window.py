@@ -3,6 +3,7 @@ TracepathThread as each hop is probed (ping/tracepath.py)."""
 
 from __future__ import annotations
 
+import socket
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QPushButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -110,10 +112,12 @@ class TracepathThread(QThread):
 class TracepathWindow(QWidget):
     """A non-modal window tracing the path MTU to one host."""
 
-    def __init__(self, title: str, ip: str, parent: QWidget | None = None) -> None:
+    def __init__(self, title: str = "", ip: str = "", parent: QWidget | None = None) -> None:
+        """Traces to `ip` straight away; with no `ip`, waits for a target
+        to be typed (opened from the sidebar with nothing selected)."""
         super().__init__(parent, Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        self.setWindowTitle(f"Trace Path MTU - {title}")
+        self.setWindowTitle(f"Trace Path MTU - {title}" if title else "Trace Path MTU")
         self.resize(760, 420)
         self._ip = ip
         self._items: dict[int, QTreeWidgetItem] = {}
@@ -138,6 +142,16 @@ class TracepathWindow(QWidget):
         self.tree.addAction(details)
         self.tree.setToolTip("Double-click a hop for its details")
 
+        self.target = QLineEdit(ip)
+        self.target.setPlaceholderText("IP address or host name")
+        self.target.setMinimumWidth(220)
+        self.target.setMaximumWidth(260)
+        self.target.returnPressed.connect(self._trace_target)
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Target:"))
+        top.addWidget(self.target)
+        top.addStretch(1)
+
         self.status = QLabel()
         self.button = QPushButton()
         self.button.clicked.connect(self._on_button)
@@ -145,10 +159,32 @@ class TracepathWindow(QWidget):
         bottom.addWidget(self.status, 1)
         bottom.addWidget(self.button)
         layout = QVBoxLayout(self)
+        layout.addLayout(top)
         layout.addWidget(self.tree)
         layout.addLayout(bottom)
 
         self._thread: TracepathThread | None = None
+        if ip:
+            self.start()
+        else:
+            self.button.setText("Trace")
+            self.status.setText("Type a target and press Trace.")
+
+    def _trace_target(self) -> None:
+        """Trace to what's in the Target field (an address or a name)."""
+        if self._thread is not None:
+            return
+        target = self.target.text().strip()
+        if not target:
+            self.status.setText("Type a target and press Trace.")
+            return
+        try:
+            ip = socket.gethostbyname(target)
+        except OSError:
+            self.status.setText(f"\"{target}\" doesn't resolve to an address")
+            return
+        self._ip = ip
+        self.setWindowTitle(f"Trace Path MTU - {target}")
         self.start()
 
     def start(self) -> None:
@@ -217,7 +253,7 @@ class TracepathWindow(QWidget):
             self.button.setEnabled(False)
             self.status.setText("Stopping...")
         else:
-            self.start()
+            self._trace_target()
 
     def _on_finished(self) -> None:
         thread, self._thread = self._thread, None
