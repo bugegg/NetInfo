@@ -747,12 +747,13 @@ class MainWindow(QMainWindow):
         self._start_mtu_check(targets)
 
     def trace_path_mtu(self) -> TracepathWindow | None:
-        """Trace Path MTU to the first selected host, in a window of its own."""
+        """Trace Path MTU to the first selected host, in a window of its own,
+        or waiting for a target to be typed if none is selected."""
         entry = next((e for e in self._selected_entries() if e.ip_address), None)
         if entry is None:
-            self.statusBar().showMessage("Select a host with an IP address to trace", 3000)
-            return None
-        window = TracepathWindow(entry.display_name, entry.ip_address, self)
+            window = TracepathWindow(parent=self)
+        else:
+            window = TracepathWindow(entry.display_name, entry.ip_address, self)
         window.show()
         window.raise_()
         window.activateWindow()

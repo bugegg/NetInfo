@@ -175,7 +175,10 @@ def test_menu_opens_a_trace_for_the_selected_host(qapp, tmp_path, monkeypatch):
     win = MainWindow(Settings())
     try:
         assert win.action_trace_mtu in win._table.actions()
-        assert win.trace_path_mtu() is None  # nothing selected
+        empty = win.trace_path_mtu()  # nothing selected: waits for a target
+        assert empty.target.text() == "" and empty._thread is None
+        assert empty.button.text() == "Trace"
+        empty.close()
         (entry,) = win._entries_from_parsed(parse_host_list("10.0.0.1 Gateway"))
         entry.ip_address = "10.0.0.1"
         win._model.set_entries([entry])
@@ -312,3 +315,35 @@ def test_country_column(qapp, monkeypatch):
     assert item.text(tracepath_window.COUNTRY_COLUMN) == "United States"
     assert not item.icon(tracepath_window.COUNTRY_COLUMN).isNull()
     window.close()
+
+
+def test_typed_target_is_resolved_and_traced(qapp, monkeypatch):
+    from NetInfoView.ui import tracepath_window
+
+    started = []
+    monkeypatch.setattr(tracepath_window.TracepathWindow, "start",
+                        lambda self: started.append(self._ip))
+    window = tracepath_window.TracepathWindow()
+    assert started == []
+    window.target.setText("127.0.0.1")
+    window.button.click()
+    assert started == ["127.0.0.1"]
+    assert window.windowTitle() == "Trace Path MTU - 127.0.0.1"
+    window.target.setText("no-such-host.invalid")
+    window._trace_target()
+    assert "doesn't resolve" in window.status.text() and started == ["127.0.0.1"]
+    window.close()
+
+
+def test_sidebar_has_trace_path_mtu(qapp, tmp_path, monkeypatch):
+    from NetInfoView.settings import Settings
+    from NetInfoView.ui.main_window import MainWindow
+
+    monkeypatch.setattr(
+        "NetInfoView.fileio.vendor_db.default_db_path", lambda: tmp_path / "v.sqlite"
+    )
+    win = MainWindow(Settings())
+    try:
+        assert win._dashboard.nav_trace_mtu.text() == "Trace Path MTU"
+    finally:
+        win.close()
