@@ -47,6 +47,8 @@ ICMP_UNREACHABLE = 3
 TCP = 6
 #: Source ports are taken from here in turn, one per probe, from a random start.
 PORT_RANGE = (40000, 60000)
+#: How long one Npcap read waits for a packet (Windows).
+NPCAP_READ_TIMEOUT_MS = 5
 #: Windows' "connection refused", reported for a RST.
 _WSAECONNREFUSED = 10061
 
@@ -116,7 +118,10 @@ class _NpcapListener:
     def __init__(self, adapter: str) -> None:
         from . import npcap
 
-        self._capture = npcap.Capture(adapter, _icmp_filter())
+        # Immediate, and a short read timeout: an answer is timed by when it's
+        # read, and while a read waits the probes' SYN-ACKs aren't checked.
+        self._capture = npcap.Capture(adapter, _icmp_filter(),
+                                      read_timeout_ms=NPCAP_READ_TIMEOUT_MS, immediate=True)
 
     def packets(self, wait: float) -> list[tuple[bytes, str]]:
         found = []
