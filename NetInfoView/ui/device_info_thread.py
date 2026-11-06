@@ -14,7 +14,8 @@ from ..ping.port_scan import ParsedPorts
 
 
 class DeviceInfoThread(QThread):
-    #: list[DeviceInfoResult]
+    #: list[DeviceInfoResult]: after each stage of the sweep (MAC and
+    #: vendor, names, ports), then once more when it's done.
     results_ready = pyqtSignal(list)
 
     def __init__(
@@ -39,7 +40,7 @@ class DeviceInfoThread(QThread):
             results = resolve_batch(
                 self._jobs, self._vendor_db, ports=self._ports,
                 snmp_routers=self._snmp_routers, snmp_community=self._snmp_community,
-                snmp_auto=self._snmp_auto,
+                snmp_auto=self._snmp_auto, report=self.results_ready.emit,
             )
         except Exception:
             # A sweep that fails shouldn't take the refresh timer down with it;

@@ -9,6 +9,7 @@ from NetInfoView.model.samples import SampleStore, nice_ceiling, summarize
 from NetInfoView.ping.result import PingResult, PingStatus
 from NetInfoView.settings import Settings
 from NetInfoView.ui.main_window import MainWindow
+from NetInfoView.ui.ping_graph import PANEL_MIN_HEIGHT
 
 
 def _ok(rtt, ts):
@@ -264,11 +265,14 @@ def test_panels_shrink_to_share_the_window(window):
     assert graph.windowTitle() == "Ping Graph - 8 hosts"
 
 
-def test_many_hosts_still_fit_one_page(window):
-    entries = _add(window, "\n".join(f"10.0.0.{i}" for i in range(1, 16)))
+def test_many_hosts_shrink_to_a_minimum_then_scroll(window):
+    entries = _add(window, "\n".join(f"10.0.0.{i}" for i in range(1, 31)))
     graph = window.open_graph(*[e.key for e in entries])
     viewport = graph._scroll.viewport().height()
-    assert sum(p.height() for p in graph.panels) <= viewport
+    assert {p.height() for p in graph.panels} == {PANEL_MIN_HEIGHT}
+    assert sum(p.height() for p in graph.panels) > viewport
+    bar = graph._scroll.verticalScrollBar()
+    assert bar.maximum() > 0
     # Crowded: time labels move to one strip under all the panels, and every
     # panel is laid out alike so their graphs are the same size.
     QApplication.processEvents()
@@ -276,3 +280,25 @@ def test_many_hosts_still_fit_one_page(window):
     assert all(p.graph.margin_bottom == 4 for p in graph.panels)
     assert len({p.graph.height() for p in graph.panels}) == 1
     graph.grab()  # paints without raising
+
+
+def test_a_run_of_timeouts_is_one_solid_red_block(qapp):
+    """Timeouts space pings out (here every 3 s); in a short span each lost
+    ping must stay red until the next one, not leave green gaps between."""
+    from NetInfoView.model.samples import Sample
+    from NetInfoView.ui.ping_graph import LOSS_COLOR, PingGraphWidget
+
+    widget = PingGraphWidget()
+    widget.resize(800, 120)
+    widget.span_seconds = 60
+    widget.first_seen = 0
+    widget.no_data_color = None
+    widget.set_samples([Sample(t, None) for t in range(0, 61, 3)], 60)
+    image = widget.grab().toImage()
+    scale = image.devicePixelRatio()
+    plot = widget._plot_rect()
+    y = int(plot.center().y() * scale)
+    # Sample across the middle, clear of the loss-percent line.
+    xs = range(int(plot.left()) + 20, int(plot.right()) - 20, 7)
+    reds = [image.pixelColor(int(x * scale), y).name() == LOSS_COLOR.name() for x in xs]
+    assert all(reds)

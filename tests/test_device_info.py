@@ -396,3 +396,25 @@ def test_dns_name_comes_from_the_system_dns_servers(monkeypatch):
     assert asked == [("10.0.0.5", ["10.0.0.1"])]
     # Two separate columns: Bonjour's name and DNS's name.
     assert (result.hostname, result.dns_name) == ("phone.local", "pc1.corp.local")
+
+
+def test_mac_and_vendor_are_reported_before_the_slow_name_lookups(monkeypatch):
+    """The ARP table and vendor database answer in milliseconds; the sweep
+    hands those over before waiting on the networked name lookups."""
+    reports = []
+    monkeypatch.setattr(device_info.arp, "lookup", lambda ip: "00:11:22:33:44:55")
+
+    def resolve(ip):
+        # By the time names are asked for, MAC and vendor are already out.
+        assert reports and reports[0][0].vendor == "Acme"
+        return "switch-01"
+
+    monkeypatch.setattr(device_info.hostname_lookup, "resolve", resolve)
+    results = device_info.resolve_batch(
+        [DeviceInfoJob(key=1, ip="192.168.1.5", needs_hostname=True)],
+        FakeVendorDB({"00:11:22:33:44:55": "Acme"}), report=reports.append,
+    )
+    assert [r[0].hostname for r in reports] == ["", "switch-01"]
+    assert reports[0][0].mac == "00:11:22:33:44:55"
+    assert results[0].hostname == "switch-01"
+    assert reports[0][0] is not results[0]  # copies: the sweep keeps writing its own

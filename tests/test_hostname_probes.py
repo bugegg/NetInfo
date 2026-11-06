@@ -110,6 +110,55 @@ def test_snmp_lookup_against_a_local_fake_agent(monkeypatch):
         server.close()
 
 
+def _fake_agent(monkeypatch, versions, community=b"public"):
+    """An agent answering sysName only in `versions` and to `community`;
+    returns what it was asked: (version, community) per request."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.bind(("127.0.0.1", 0))
+    monkeypatch.setattr(snmp, "SNMP_PORT", server.getsockname()[1])
+    asked = []
+
+    def serve():
+        while True:
+            try:
+                request, addr = server.recvfrom(1024)
+            except OSError:
+                return
+            _, start, end = ber.read(request)
+            (_, v_start, v_end), (_, c_start, c_end), (_, pdu_start, pdu_end) = list(
+                ber.children(request, start, end))
+            version = ber.decode_int(request, v_start, v_end)
+            asked.append((version, request[c_start:c_end]))
+            if version in versions and request[c_start:c_end] == community:
+                _, id_start, id_end = next(ber.children(request, pdu_start, pdu_end))
+                server.sendto(_snmp_response(ber.decode_int(request, id_start, id_end),
+                                             ber.OCTET_STRING, b"AD-FL16-01"), addr)
+
+    threading.Thread(target=serve, daemon=True).start()
+    return server, asked
+
+
+def test_snmp_lookup_finds_a_v2c_only_agent(monkeypatch):
+    """HP V1910 / Comware answers v2c and ignores v1."""
+    server, asked = _fake_agent(monkeypatch, versions={snmp.VERSION_2C})
+    try:
+        assert snmp.lookup("127.0.0.1", timeout=0.5) == "AD-FL16-01"
+    finally:
+        server.close()
+    assert (snmp.VERSION_2C, b"public") in asked
+
+
+def test_snmp_lookup_uses_the_community_from_settings(monkeypatch):
+    monkeypatch.setattr(snmp, "_community", snmp.COMMUNITY)
+    snmp.set_community("s3cret")
+    server, asked = _fake_agent(monkeypatch, versions={snmp.VERSION_1}, community=b"s3cret")
+    try:
+        assert snmp.lookup("127.0.0.1", timeout=0.5) == "AD-FL16-01"
+    finally:
+        server.close()
+    assert snmp.communities() == [b"s3cret", b"public"]  # public is still asked too
+
+
 # --- TLS certificate ---
 
 @pytest.fixture(scope="module")

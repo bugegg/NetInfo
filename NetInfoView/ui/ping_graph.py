@@ -74,9 +74,10 @@ MARGIN_TOP = 6
 MARGIN_BOTTOM = 22
 
 #: A panel's height while there's room; with many hosts they shrink so that
-#: all of them fit the window, down to PANEL_MIN_HEIGHT before it scrolls.
+#: all of them fit the window, down to PANEL_MIN_HEIGHT (about a dozen hosts
+#: in a full-height window); past that they stay this size and it scrolls.
 PANEL_HEIGHT = 250
-PANEL_MIN_HEIGHT = 44
+PANEL_MIN_HEIGHT = 64
 #: Below this a panel drops its jitter strip to leave room for latency.
 COMPACT_BELOW = 190
 #: Below this panels leave time labels to one strip under them all, and the
@@ -372,15 +373,26 @@ class PingGraphWidget(_TimeAxisWidget):
         return plot.width() * self._expected_gap() / self.span_seconds
 
     def _paint_losses(self, painter: QPainter, plot: QRectF) -> None:
-        width = max(3.0, min(6.0, self._sample_width(plot)))
-        for sample in self._samples:
+        """A lost ping is red from when it was sent until the next ping, so a
+        run of timeouts (which space pings out) reads as one solid block
+        rather than thin bars with gaps between them."""
+        gap_limit = self._expected_gap() * 3
+        painter.setClipRect(plot)
+        for i, sample in enumerate(self._samples):
             if sample.rtt_ms is not None:
                 continue
+            following = (
+                self._samples[i + 1].timestamp if i + 1 < len(self._samples) else self._end
+            )
+            # A pause in pinging after it isn't part of the loss.
+            until = min(following, sample.timestamp + gap_limit)
             x = self._x_for(sample.timestamp, plot)
-            if plot.left() <= x <= plot.right():
+            width = max(3.0, self._x_for(until, plot) - x)
+            if x + width >= plot.left() and x <= plot.right():
                 painter.fillRect(
-                    QRectF(x - width / 2, plot.top(), width, plot.height()), self.loss_color
+                    QRectF(x, plot.top(), width, plot.height()), self.loss_color
                 )
+        painter.setClipping(False)
 
     def _paint_line(self, painter: QPainter, plot: QRectF, top_ms: float) -> None:
         gap_limit = self._expected_gap() * 3
@@ -663,7 +675,8 @@ class PingGraphWindow(QWidget):
 
     def _fit_panels(self) -> None:
         """Share the window's height between the panels: full size while they
-        fit, ever smaller as hosts are added so they all stay on one page."""
+        fit, smaller as hosts are added, down to PANEL_MIN_HEIGHT, after which
+        the column scrolls."""
         count = max(1, len(self.panels))
         # The shared time axis takes its room before the panels share the rest.
         tiny = self._scroll.height() + (
