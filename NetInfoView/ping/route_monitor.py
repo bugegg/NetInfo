@@ -115,7 +115,8 @@ def round_windows(ip: str, ttls: list[int], round_no: int, wait_ms: int = WAIT_M
     from .result import PingStatus
 
     def one(ttl: int) -> tuple[int, Answer | None]:
-        result = echo(ip, wait_ms, PAYLOAD, ttl=ttl, dont_fragment=False)
+        result = echo(ip, wait_ms, PAYLOAD, ttl=ttl, dont_fragment=False,
+                      error_rtt=True)
         if not result.reply_ip or result.status in (
                 PingStatus.TIMEOUT, PingStatus.NO_RESOURCES, PingStatus.GENERAL_FAILURE):
             return ttl, None

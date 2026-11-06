@@ -390,3 +390,33 @@ def test_send_echo_carries_the_given_data():
     api = icmp_windows._IcmpApi()
     result = icmp_windows.send_echo(api, "127.0.0.1", 2000, 8, 64, False, data=b"\xab\xcd" * 4)
     assert result.status is PingStatus.SUCCEEDED
+
+
+# -- hop-by-hop probes keep each router's round trip --------------------------
+
+
+@pytest.mark.parametrize("module_name, call", [
+    ("route_monitor", lambda m: m.round_windows("1.1.1.1", [1, 2], 0)),
+    ("netpath", lambda m: m.probe_windows("1.1.1.1", 1, [0])),
+])
+def test_windows_hop_probes_time_routers_by_their_reply(monkeypatch, module_name, call):
+    """A router's TTL-expired reply carries its round trip; before, Windows
+    dropped it and every hop showed the 1500 ms wait instead."""
+    import importlib
+
+    from NetInfoView.ping import icmp_windows
+    from NetInfoView.ping.result import PingResult
+
+    module = importlib.import_module(f"NetInfoView.ping.{module_name}")
+    seen = []
+
+    def fake_echo(ip, timeout_ms, size, ttl=64, dont_fragment=True, error_rtt=False):
+        seen.append(error_rtt)
+        if not error_rtt:
+            return PingResult(PingStatus.TTL_EXPIRED, None, "192.168.1.1", 64)
+        return PingResult(PingStatus.TTL_EXPIRED, 3.4, "192.168.1.1", 64)
+
+    monkeypatch.setattr(icmp_windows, "echo", fake_echo)
+    answers = call(module)
+    assert seen and all(seen)
+    assert answers and all(answer.rtt_ms == 3.4 for answer in answers.values())

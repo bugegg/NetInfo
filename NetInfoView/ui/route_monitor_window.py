@@ -318,6 +318,16 @@ class RouteMonitorThread(QThread):
         self.name_ready.emit(address, name or "")
 
 
+def _selected_ink(widget) -> QColor:
+    """The text colour of a selected row in the app's theme. Not the
+    palette's HighlightedText: Windows' style keeps that white while the
+    app stylesheet paints the selection light, which made the tag vanish."""
+    from .dashboard import theme_colors
+    main = widget.window().parentWidget() if widget is not None else None
+    settings = getattr(main, "settings", None)
+    return QColor(theme_colors(bool(getattr(settings, "dark_background", False)))["selected_ink"])
+
+
 class HopDelegate(QStyledItemDelegate):
     """Paints the hop number as a coloured bubble, and the latency column:
     the packet-loss bar and the min-max whisker (RouteLineOverlay adds the
@@ -357,8 +367,7 @@ class HopDelegate(QStyledItemDelegate):
         painter.save()
         painter.setFont(tag_font)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
-        painter.setPen(option.palette.color(option.palette.ColorRole.HighlightedText)
-                       if selected else GRAPHED_COLOR)
+        painter.setPen(_selected_ink(option.widget) if selected else GRAPHED_COLOR)
         painter.drawText(QRectF(option.rect).adjusted(0, 0, -6, 0),
                          Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, GRAPHED_TEXT)
         painter.restore()
