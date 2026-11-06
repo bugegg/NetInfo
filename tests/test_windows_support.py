@@ -344,3 +344,140 @@ def test_downloads_are_verified_by_the_operating_system():
     from NetInfoView.https import ssl_context
 
     assert isinstance(ssl_context(), truststore.SSLContext)
+
+
+# -- Repeat Ping on Windows ---------------------------------------------------
+
+
+def test_repeat_ping_sends_the_pattern_through_icmpsendecho(monkeypatch):
+    """WindowsEcho hands the IOS pattern data to send_echo (runs anywhere:
+    the iphlpapi calls are replaced)."""
+    from NetInfoView.ping import icmp_windows, repeat_ping
+    from NetInfoView.ping.result import PingResult
+
+    calls = []
+    monkeypatch.setattr(icmp_windows, "_IcmpApi", lambda: object())
+
+    def fake_send_echo(api, ip, timeout_ms, size, ttl, dont_fragment, data=None):
+        calls.append((ip, timeout_ms, size, dont_fragment, data))
+        return PingResult(PingStatus.SUCCEEDED, 1.0, ip, 64)
+
+    monkeypatch.setattr(icmp_windows, "send_echo", fake_send_echo)
+    chars = []
+    options = repeat_ping.RepeatOptions(count=3)
+    assert repeat_ping.run("10.0.0.1", options, lambda c, r, s: chars.append(c),
+                           echo_factory=repeat_ping.WindowsEcho)
+    assert chars == ["!", "!", "!"]
+    ip, timeout_ms, size, dont_fragment, data = calls[0]
+    assert (ip, timeout_ms, size, dont_fragment) == ("10.0.0.1", 2000, 72, False)
+    assert data == repeat_ping.payload(100, 0xABCD)
+
+
+@windows_only
+def test_real_repeat_ping_to_loopback_on_windows():
+    from NetInfoView.ping import repeat_ping
+
+    chars = []
+    assert repeat_ping.run("127.0.0.1", repeat_ping.RepeatOptions(count=50),
+                           lambda c, r, s: chars.append(c))
+    assert chars == ["!"] * 50
+
+
+@windows_only
+def test_send_echo_carries_the_given_data():
+    from NetInfoView.ping import icmp_windows
+
+    api = icmp_windows._IcmpApi()
+    result = icmp_windows.send_echo(api, "127.0.0.1", 2000, 8, 64, False, data=b"\xab\xcd" * 4)
+    assert result.status is PingStatus.SUCCEEDED
+
+
+# -- hop-by-hop probes keep each router's round trip --------------------------
+
+
+@pytest.mark.parametrize("module_name, call", [
+    ("route_monitor", lambda m: m.round_windows("1.1.1.1", [1, 2], 0)),
+    ("netpath", lambda m: m.probe_windows("1.1.1.1", 1, [0])),
+])
+def test_windows_hop_probes_time_routers_by_their_reply(monkeypatch, module_name, call):
+    """A router's TTL-expired reply carries its round trip; before, Windows
+    dropped it and every hop showed the 1500 ms wait instead."""
+    import importlib
+
+    from NetInfoView.ping import icmp_windows
+    from NetInfoView.ping.result import PingResult
+
+    module = importlib.import_module(f"NetInfoView.ping.{module_name}")
+    seen = []
+
+    def fake_echo(ip, timeout_ms, size, ttl=64, dont_fragment=True, error_rtt=False):
+        seen.append(error_rtt)
+        if not error_rtt:
+            return PingResult(PingStatus.TTL_EXPIRED, None, "192.168.1.1", 64)
+        return PingResult(PingStatus.TTL_EXPIRED, 3.4, "192.168.1.1", 64)
+
+    monkeypatch.setattr(icmp_windows, "echo", fake_echo)
+    answers = call(module)
+    assert seen and all(seen)
+    assert answers and all(answer.rtt_ms == 3.4 for answer in answers.values())
+
+
+def test_tcp_net_path_captures_in_immediate_mode(monkeypatch):
+    """Npcap's default buffering held the routers' answers for up to 250 ms,
+    and each read blocked that long: the first hop showed ~600 ms."""
+    from NetInfoView.ping import netpath_tcp, npcap
+
+    opened = []
+
+    class FakeCapture:
+        def __init__(self, name, program, read_timeout_ms=npcap.READ_TIMEOUT_MS, immediate=False):
+            opened.append((name, read_timeout_ms, immediate))
+
+        def next_frame(self):
+            return None
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(npcap, "Capture", FakeCapture)
+    listener = netpath_tcp._NpcapListener("eth0")
+    assert opened == [("eth0", netpath_tcp.NPCAP_READ_TIMEOUT_MS, True)]
+    assert netpath_tcp.NPCAP_READ_TIMEOUT_MS <= 10
+    listener.close()
+
+
+def test_capture_asks_npcap_for_immediate_delivery(monkeypatch):
+    from NetInfoView.ping import npcap
+
+    calls = []
+
+    class FakeDll:
+        def pcap_open_live(self, name, snaplen, promisc, to_ms, errbuf):
+            calls.append(("open", to_ms))
+            return 1
+
+        def pcap_datalink(self, handle):
+            return npcap.DLT_EN10MB
+
+        def pcap_setfilter(self, handle, program):
+            return 0
+
+        def pcap_setdirection(self, handle, direction):
+            return 0
+
+        def pcap_setmintocopy(self, handle, size):
+            calls.append(("mintocopy", size))
+            return 0
+
+        def pcap_close(self, handle):
+            pass
+
+    monkeypatch.setattr(npcap, "_load", lambda: FakeDll())
+    import ctypes
+
+    program = ctypes.c_int(0)
+    npcap.Capture("x", program, read_timeout_ms=5, immediate=True).close()
+    assert calls == [("open", 5), ("mintocopy", 0)]
+    calls.clear()
+    npcap.Capture("x", program).close()  # LLDP/CDP: as before
+    assert calls == [("open", npcap.READ_TIMEOUT_MS)]

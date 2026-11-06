@@ -27,10 +27,11 @@ ICMP_ECHO_REPLY = 0
 
 _ICMP_HEADER = struct.Struct("!BBHHH")  # type, code, checksum, id, sequence
 
-#: macOS defines IP_DONTFRAG but Python does not always export it. It is rejected
-#: with EINVAL on an unprivileged ICMP datagram socket; we probe for it at open
-#: time and let the UI grey the option out.
-_IP_DONTFRAG = getattr(socket, "IP_DONTFRAG", 67)
+#: macOS defines IP_DONTFRAG as 28 (netinet/in.h) but Python does not export
+#: it. It works on the unprivileged ICMP datagram socket (an echo bigger than
+#: the link then fails with EMSGSIZE); if a kernel ever rejects it, that is
+#: probed at open time and the UI greys the option out.
+_IP_DONTFRAG = getattr(socket, "IP_DONTFRAG", 28)
 
 #: Receive/send buffer we ask for, large enough to hold the replies from a full
 #: round of the default 500 concurrent pings without the kernel dropping any.
@@ -232,6 +233,8 @@ def _enlarge_buffers(sock: socket.socket) -> None:
 def _status_for_send_error(exc: OSError) -> PingStatus:
     import errno
 
+    if exc.errno == errno.EMSGSIZE:
+        return PingStatus.FRAGMENTATION_NEEDED  # bigger than the link, with DF
     if exc.errno in (errno.ENETUNREACH, errno.ENETDOWN):
         return PingStatus.NET_UNREACHABLE
     if exc.errno in (errno.EHOSTUNREACH, errno.EHOSTDOWN):

@@ -47,6 +47,8 @@ ICMP_UNREACHABLE = 3
 TCP = 6
 #: Source ports are taken from here in turn, one per probe, from a random start.
 PORT_RANGE = (40000, 60000)
+#: How long one Npcap read waits for a packet (Windows).
+NPCAP_READ_TIMEOUT_MS = 5
 #: Windows' "connection refused", reported for a RST.
 _WSAECONNREFUSED = 10061
 
@@ -93,8 +95,12 @@ class _SocketListener:
         sock.setblocking(False)
         self._sock = sock
 
-    def packets(self, wait: float) -> list[tuple[bytes, str]]:
-        if not select.select([self._sock], [], [], max(0.0, wait))[0]:
+    def packets(self, wait: float, watch=()) -> list[tuple[bytes, str]]:
+        """ICMP packets that arrive within `wait`; returns early, maybe with
+        none, as soon as a connect in `watch` completes or fails, so a host's
+        SYN-ACK is timed when it comes rather than at the next poll."""
+        readable, _, _ = select.select([self._sock], list(watch), list(watch), max(0.0, wait))
+        if not readable:
             return []
         found = []
         while True:
@@ -116,9 +122,14 @@ class _NpcapListener:
     def __init__(self, adapter: str) -> None:
         from . import npcap
 
-        self._capture = npcap.Capture(adapter, _icmp_filter())
+        # Immediate, and a short read timeout: an answer is timed by when it's
+        # read, and while a read waits the probes' SYN-ACKs aren't checked.
+        self._capture = npcap.Capture(adapter, _icmp_filter(),
+                                      read_timeout_ms=NPCAP_READ_TIMEOUT_MS, immediate=True)
 
-    def packets(self, wait: float) -> list[tuple[bytes, str]]:
+    def packets(self, wait: float, watch=()) -> list[tuple[bytes, str]]:
+        # Npcap has no descriptor to select on with `watch`; its reads are
+        # short instead (NPCAP_READ_TIMEOUT_MS), so connects are checked often.
         found = []
         deadline = time.monotonic() + max(0.0, wait)
         while True:
@@ -237,6 +248,9 @@ class TcpProber:
         listener = self._listener
         sent: dict[int, tuple[socket.socket, int, float]] = {}  # port -> (socket, flow, sent)
         answers: dict[int, Answer] = {}
+        #: Connects that failed other than by a RST (a router's ICMP error):
+        #: their answer comes through the listener; not watched any more.
+        dead: set[socket.socket] = set()
         try:
             for flow in flows:
                 port = sock = None
@@ -261,7 +275,9 @@ class TcpProber:
                 left = deadline - time.perf_counter()
                 if left <= 0:
                     break
-                for packet, source in listener.packets(min(left, 0.02)):
+                watch = [sock for sock, flow, _ in sent.values()
+                         if flow not in answers and sock not in dead]
+                for packet, source in listener.packets(min(left, 0.02), watch):
                     quoted = quoted_tcp(packet)
                     if quoted is None:
                         continue
@@ -276,7 +292,7 @@ class TcpProber:
                         reached=from_host,
                         unreachable=kind == ICMP_UNREACHABLE and not from_host,
                     )
-                self._check_connects(sent, answers, ip)
+                self._check_connects(sent, answers, ip, dead)
         finally:
             for sock, _, _ in sent.values():
                 sock.close()
@@ -298,10 +314,12 @@ class TcpProber:
             return None
 
     @staticmethod
-    def _check_connects(sent, answers, ip: str) -> None:
+    def _check_connects(sent, answers, ip: str, dead: set | None = None) -> None:
         """A connect that completed (SYN-ACK) or was refused (RST): the
-        host answered."""
-        pending = [entry[0] for entry in sent.values() if entry[1] not in answers]
+        host answered. One that failed otherwise goes into `dead`."""
+        dead = set() if dead is None else dead
+        pending = [entry[0] for entry in sent.values()
+                   if entry[1] not in answers and entry[0] not in dead]
         if not pending:
             return
         _, writable, failed = select.select([], pending, pending, 0)
@@ -313,6 +331,7 @@ class TcpProber:
             except OSError:
                 error = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
                 if error not in (errno.ECONNREFUSED, _WSAECONNREFUSED):
+                    dead.add(sock)
                     continue  # e.g. an ICMP error, heard on the listener
             answers[flow] = Answer(ip, (time.perf_counter() - started) * 1000, reached=True)
 

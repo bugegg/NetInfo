@@ -584,6 +584,14 @@ class Dashboard(QWidget):
         # Net Path maps the routes to the selected device.
         self.nav_net_path = self._tool_button("Net Path", "netpath", "navButton", w.action_net_path)
         nav.addWidget(self.nav_net_path)
+        # Repeat Ping: Cisco-style ping … repeat to the selected device.
+        self.nav_repeat_ping = self._tool_button("Repeat Ping", "repeatping", "navButton",
+                                                 w.action_repeat_ping)
+        nav.addWidget(self.nav_repeat_ping)
+        # Port Scan checks the selected device's TCP ports.
+        self.nav_port_scan = self._tool_button("Port Scan", "portscan", "navButton",
+                                               w.action_port_scan)
+        nav.addWidget(self.nav_port_scan)
         # Settings opens Options straight away; the view toggles (dark
         # background, font, lower pane, ...) stay on the grid's right-click menu.
         self.nav_settings = self._tool_button("Settings", "settings", "navButton", w.action_options)
@@ -1001,9 +1009,11 @@ class Dashboard(QWidget):
 def apply_theme(window) -> None:
     c = theme_colors(window.settings.dark_background)
     family = f"font-family: '{fonts.UI_FAMILY}';" if fonts.load() else ""
+    mono_family = f"font-family: '{fonts.mono().family()}';"
     window.setStyleSheet(f"""
         QMainWindow {{ background: {c['bg']}; }}
         QWidget {{ color: {c['ink']}; font-size: 12px; {family} }}
+        QWidget[mono="true"] {{ {mono_family} }}
         QWidget#body, QWidget#inspector, QSplitter {{ background: {c['bg']}; }}
         QScrollArea#overviewScroll, QScrollArea#overviewScroll > QWidget > QWidget {{ background: {c['bg']}; }}
         QDialog, QMenu {{ background: {c['surface']}; }}

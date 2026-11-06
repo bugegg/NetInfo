@@ -19,7 +19,7 @@ def listening_port():
     to find without touching the network."""
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind(("127.0.0.1", 0))
-    server.listen(1)
+    server.listen(8)
     port = server.getsockname()[1]
 
     stop = threading.Event()
@@ -127,17 +127,17 @@ def test_scan_many_reports_a_udp_port_as_closed_on_icmp_unreachable():
     assert results == {1: []}
 
 
-def test_scan_many_treats_a_silent_udp_port_as_open(monkeypatch):
-    """No reply and no ICMP error (the common case for a real, working UDP
-    service that ignores an unsolicited empty probe) is reported as open —
-    this is the documented best-effort behaviour of _check_udp_port."""
+def test_scan_many_does_not_count_a_silent_udp_port(monkeypatch):
+    """No reply and no ICMP error: it may be open, or a firewall may drop
+    it, so the grid doesn't list it (the Port Scan window calls it
+    open|filtered)."""
     monkeypatch.setattr(port_scan, "UDP_TIMEOUT_SECONDS", 0.05)
     server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     server.bind(("127.0.0.1", 0))  # bound, so no ICMP unreachable, but silent
     port = server.getsockname()[1]
     try:
         results = scan_many({1: "127.0.0.1"}, ports={}, udp_ports={port: "test"})
-        assert results == {1: [f"{port}/udp"]}
+        assert results == {1: []}
     finally:
         server.close()
 

@@ -3,6 +3,10 @@
 A desktop ping monitor for macOS and Windows. It pings many hosts at a fixed interval over
 ICMP or TCP, shows per-host statistics in a sortable grid, and discovers device
 details (MAC address, hostname, vendor, open ports) for hosts that answer.
+**Port Scan** (right-click a host, or the sidebar) lists every open TCP and UDP port
+on one host — common ports, 1–1024, all 65535, or your own list — with the
+service and banner behind each. **Repeat Ping** is a Cisco-style
+`ping … repeat`: echoes back to back (100000 is fine), with Cisco's defaults.
 See [spec.md](spec.md) for the full specification. NetInfoView was
 called NetInfo up to version 1.4, and PingInfoView before that.
 

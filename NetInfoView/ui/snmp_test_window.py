@@ -90,7 +90,7 @@ class SnmpTestWindow(QWidget):
 
         self.text = QPlainTextEdit()
         self.text.setReadOnly(True)
-        self.text.setFont(fonts.mono())
+        fonts.use_mono(self.text)
         self.text.setPlaceholderText("Press Test to ask the host for its SNMP name and description.")
 
         layout = QVBoxLayout(self)

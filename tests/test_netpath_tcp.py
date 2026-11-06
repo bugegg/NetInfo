@@ -38,7 +38,7 @@ class FakeListener:
         self.router, self.closed = router, False
         self.ports = []  # the source ports the probes went from
 
-    def packets(self, wait):
+    def packets(self, wait, watch=()):
         return [(_exceeded(self.router, port), self.router) for port in self.ports]
 
     def close(self):
@@ -71,7 +71,7 @@ def test_a_router_on_the_way_answers_for_every_flow(monkeypatch):
 
 
 class Silent:
-    def packets(self, wait):
+    def packets(self, wait, watch=()):
         return []
 
     def close(self):

@@ -456,9 +456,22 @@ def test_udp_port_scan_against_a_real_local_listener(window, monkeypatch):
         "NetInfoView.ping.device_info.port_scan.scan_many", _REAL_SCAN_MANY
     )
 
+    import threading
+
+    # A UDP service that answers: silence alone doesn't count as open.
     server = socket_module.socket(socket_module.AF_INET, socket_module.SOCK_DGRAM)
     server.bind(("127.0.0.1", 0))
     port = server.getsockname()[1]
+
+    def answer():
+        while True:
+            try:
+                _, peer = server.recvfrom(512)
+                server.sendto(b"ack", peer)
+            except OSError:
+                return
+
+    threading.Thread(target=answer, daemon=True).start()
     window.settings.port_scan_ports = f"{port}/udp"
     try:
         monkeypatch.setattr("NetInfoView.ping.hostname.resolve", lambda ip: "")

@@ -210,9 +210,11 @@ def test_right_click_menu_keeps_only_host_actions_and_view_toggles(window):
     names = [a.text() for a in window._table.actions() if not a.isSeparator()]
     assert names == [
         window.action_properties.text(), window.action_graph.text(),
+        window.action_repeat_ping.text(),
         window.action_trace_mtu.text(), window.action_net_path.text(),
         window.action_route_monitor.text(),
         window.action_ssh.text(), window.action_telnet.text(), window.action_snmp_test.text(),
+        window.action_port_scan.text(),
         window.action_remove.text(), window.action_clear_all.text(),
         window.action_dark.text(), window.action_autosize.text(), window.action_about.text(),
     ]

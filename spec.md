@@ -35,8 +35,9 @@ export formats where practical.
 **Non-goals**
 
 - IPv6 pinging (only IPv4 is resolved and pinged).
-- General-purpose port scanning or OS/product fingerprinting. The port probe
-  only checks a short list and reports hedged guesses.
+- OS/product fingerprinting or SYN/stealth scanning. The grid's port probe
+  only checks a short list and reports hedged guesses; the Port Scan window
+  (§9.3) is a plain TCP connect / UDP probe scan of one host.
 - Persisting statistics or history between sessions.
 
 ## 3. Project layout
@@ -64,6 +65,8 @@ Pininfoview/
 │   │   ├── http_title.py       web page <title> as a last resort
 │   │   ├── ber.py              minimal ASN.1 BER/DER encode/walk
 │   │   ├── port_scan.py        port probe + device-type guess
+│   │   ├── port_scanner.py     Port Scan window's TCP/UDP scan of one host
+│   │   ├── dhcp_probe.py       DHCP server check: DHCPINFORM as a relay agent
 │   │   ├── device_info.py      batch resolver for MAC/hostname/vendor/ports/all IPs
 │   │   ├── mtu.py              path MTU search via /sbin/ping -D
 │   │   ├── tracepath.py        per-hop path MTU (Trace Path MTU)
@@ -144,8 +147,9 @@ Cross-thread communication:
 - The socket send/receive buffers are raised to 1 MiB, halving the request down
   to 32 KiB until the kernel accepts it. Without this, the default 8 KB buffer
   drops replies when hundreds of pings are in flight.
-- TTL is set with `IP_TTL`. `IP_DONTFRAG` (option 67 if Python doesn't export
-  it) is applied when possible. If the kernel rejects it, the
+- TTL is set with `IP_TTL`. `IP_DONTFRAG` (option 28 on macOS; Python doesn't export
+  it) is applied; it works on the unprivileged socket, and an echo bigger than
+  the link then fails with EMSGSIZE (Packet Needs To Be Fragmented). If the kernel rejects it, the
   `dont_fragment_supported` flag is cleared and the Options dialog greys the
   option out.
 - The payload is `ping_size` bytes of a repeating `a…w` pattern. The checksum
@@ -347,9 +351,11 @@ Defaults: TCP 62078, 3389, 9100, 631, 548, 445, 139, 5900, 22, 23, 80, 443, 8080
 with a `# label` comment.
 
 - TCP: a port is open if `connect()` succeeds within 0.6 s.
-- UDP: send an empty datagram on a connected socket. Only an ICMP
-  port-unreachable (seen as `ConnectionRefusedError`) counts as closed; silence
-  counts as open (best-effort, 0.6 s timeout).
+- UDP: the same probe as the Port Scan window (`port_scanner.probe_udp`):
+  well-known services get a request of their own kind (DNS, NTP, SNMP,
+  SSDP, NetBIOS, …), anything else an empty datagram, sent twice, 0.6 s
+  each. Only a reply counts as open; port unreachable and silence (open or
+  firewalled, can't tell) are left out.
 - Results are sorted by port number and then protocol.
 
 The device-type guess uses TCP ports only and checks them in a fixed order. The
@@ -526,6 +532,78 @@ There is no menu bar; everything else is in this menu.
   the list is locked while listening.
   BPF needs no root when the user is in the `access_bpf` group (Wireshark's
   ChmodBPF); otherwise the status line says capture isn't permitted.
+- Repeat Ping… (Ctrl+Shift+P, also the sidebar's Repeat Ping button) — Cisco IOS-style `ping … repeat` to one host
+  (`ping/repeat_ping.py`, `ui/repeat_ping_window.py`), the first selected
+  host filled in; it starts when Ping is pressed. Each echo goes the moment
+  the last is answered or times out, no interval, so the rate is set by the
+  round trip (hundreds to ~1000 a second on a LAN). The window has only
+  Target and Repeat count (1–2147483647, default 1000); everything else is
+  Cisco's default: 100-byte datagrams (IP + ICMP headers included), 2 s
+  timeout, data pattern 0xABCD, no DF. (`ping/repeat_ping.py` also takes
+  size, timeout 0, DF, pattern and a size sweep, unused by the window.)
+  macOS: its own blocking unprivileged ICMP socket with
+  a random identifier (never the grid's), IP_DONTFRAG (28) for DF, an echo
+  bigger than the link with DF fails with EMSGSIZE = M; Windows:
+  IcmpSendEcho with the pattern as data. Output as IOS: "Sending n, s-byte
+  ICMP Echos to ip, timeout is t seconds:" (DF and pattern lines only when
+  not default), one
+  character per echo, wrapped to fill the box and re-wrapped when it is
+  resized (`!` reply, `.` timeout, `U`
+  unreachable, `M` could not fragment, `Q` source quench, `&` TTL expired,
+  `?` other; M only with DF), then "Success rate is p percent (r/s), round-trip
+  min/avg/max = …" (p rounded down) and, for a DF sweep that hit M, the
+  largest size that got through. A live line above shows sent / received /
+  loss % / min/avg/max / echoes per second; Ping becomes Stop; Copy copies
+  the text.
+- Port Scan… (Ctrl+P, also the sidebar's Port Scan button) — which TCP and
+  UDP ports one host has open (`ping/port_scanner.py`,
+  `ui/port_scan_window.py`). Opens with the first selected host and scans
+  its common TCP ports straight away, or empty for a host to be typed (an
+  IP or a name; IPv4 preferred). Protocol: TCP · UDP · TCP + UDP. Ports:
+  Common ports (~110 TCP: services and network gear such as Winbox,
+  NETCONF, Smart Install, TR-069; ~35 UDP) · Well-known (1–1024) · All
+  ports (1–65535) · Custom (`22, 80, 8000-8100`; a bad piece is named and
+  nothing runs). No other settings: 1 s timeout per probe, 256 probes in
+  flight, services always identified and silent UDP ports always rechecked.
+  TCP: a plain `connect()` — open = handshake done, closed = refused,
+  filtered = timeout or unreachable. Each
+  open TCP port gets 1 s to send its own greeting (SSH, FTP, SMTP, Telnet,
+  …; read on past Telnet negotiation) and its first line is shown; one
+  that sends none is asked `HEAD /` as a web server (status and `Server:`
+  header), and over TLS (version, certificate CN, then `HEAD /` again)
+  when it answers like a TLS port or is a usual TLS port (443, 8443, 993…).
+  UDP: well-known services get a request they answer, decoded where it
+  helps — DHCP (`ping/dhcp_probe.py`): a server never answers the port a
+  request came from, so a DHCPINFORM is sent as a relay agent forwards one
+  (giaddr = this computer's address toward the target, one hop) and the
+  DHCPACK is heard on UDP 67, bound without root and shared by every probe
+  of a sweep (a reader thread hands replies over by transaction ID; closed
+  when none waits); INFORM makes the server neither offer nor lease an
+  address. Shown as "DHCP ACK · server a.b.c.d"; no reply falls back to
+  the plain probe; DNS/mDNS/LLMNR PTR query (rcode, name), NTP (version, stratum),
+  NetBIOS node status (name), SNMP v2c GET of sysName (the Settings
+  community, then `public`), SSDP M-SEARCH and SIP OPTIONS (Server
+  header), NAT-PMP (external IP), TFTP read, RPC NULL (portmapper, NFS),
+  IKEv1 Main Mode, OpenVPN hard reset, RIP, IPMI presence ping, SQL
+  Browser, STUN, WS-Discovery, CoAP, BACnet Who-Is, Ubiquiti discovery,
+  memcached; any other port an empty datagram. Each is sent twice within
+  the timeout. A reply = open (its description, first text line, or
+  "replied (n bytes)"), ICMP port unreachable = closed
+  (ConnectionRefusedError, or ConnectionResetError on Windows), silence =
+  open|filtered. Hosts rate-limit port unreachable (Linux: a burst of six,
+  then about one a second), so the silent ports are asked again, once each per round, all at once,
+  round after round while a round settles any of them (at most 600
+  rounds); the status line shows the round and the progress bar goes
+  busy. A host without a limit costs one extra round (one timeout); a
+  Linux router's ~30 common UDP ports take ~25 s and end up almost all
+  closed instead of open|filtered.
+  The table lists open ports, sorted by port then protocol, as they're
+  found: Port (`22/tcp`) · State · Service (built-in list, else the OS
+  services database) · Banner / Reply · Time; UDP ports that never replied are only counted.
+  Scan sits at the right end of
+  the Ports row and becomes Stop; a progress bar with the open count fills
+  the gap before it while scanning. The status line sums up open / closed / filtered /
+  open|filtered and time taken.
 - Add Hosts · Remove Selected (Delete)
 - Enable Selected · Disable Selected · Clear Statistics (selection, or all hosts)
 - Load Host List (⌘O — replaces the list and clears history) · Save Host List
@@ -634,8 +712,14 @@ vendor update. `tests/fixtures/ifconfig_sample.txt` provides realistic
   pinged.
 - **MAC/vendor are only available on the local link**, because they come from
   the ARP table.
-- **UDP "open" is optimistic.** A host that drops packets silently will report
-  every probed UDP port as open.
+- **Port Scan on Windows can't tell a closed TCP port from a filtered one.**
+  Windows retries a connect the port refused for about 2 s, past the 1 s
+  timeout, so closed ports are counted as filtered there (open ones are
+  unaffected), and the "nothing answered" hint isn't shown.
+- **UDP needs a reply.** A UDP service that ignores its probe isn't listed
+  as open. DHCP (67) is asked as a relay agent (below), which needs UDP 67
+  free on this computer; if something else holds it (Internet Sharing's
+  bootpd), 67 gets the plain probe and a DHCP server shows as not open.
 - **Statistics and history are not saved.** Settings are saved only when the
   window closes normally, so a crash loses any changes made to them.
 - **The app bundle isn't portable.** The launcher hard-codes

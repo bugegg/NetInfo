@@ -111,14 +111,20 @@ _INVALID_HANDLE = ctypes.c_void_p(-1).value
 
 
 def send_echo(
-    api: _IcmpApi, ip: str, timeout_ms: int, payload_size: int, ttl: int, dont_fragment: bool
+    api: _IcmpApi, ip: str, timeout_ms: int, payload_size: int, ttl: int, dont_fragment: bool,
+    data: bytes | None = None, error_rtt: bool = False,
 ) -> PingResult:
-    """One blocking echo request; what IcmpWindowsPinger runs on a worker."""
+    """One blocking echo request; what IcmpWindowsPinger runs on a worker.
+    `data`, if given, is sent as the echo's data instead of the filler.
+    With `error_rtt`, an ICMP error reply (a router's TTL expired, an
+    unreachable) keeps its round trip too: hop-by-hop probes (Ping Monitor,
+    Net Path) time each router by it. Off, a failed ping has no RTT, as the
+    grid expects."""
     handle = api.create()
     if not handle or handle == _INVALID_HANDLE:
         return PingResult(PingStatus.NO_RESOURCES)
     try:
-        payload = _payload(payload_size)
+        payload = _payload(payload_size) if data is None else data
         options = IP_OPTION_INFORMATION(Ttl=ttl, Flags=IP_FLAG_DF if dont_fragment else 0)
         # Room for one reply, its echoed data, and an ICMP error's quoted header.
         reply_size = ctypes.sizeof(ICMP_ECHO_REPLY) + len(payload) + 8 + 64
@@ -135,11 +141,11 @@ def send_echo(
         status = status_for_ip_status(reply.Status)
         reply_ip = ipaddr_to_ip(reply.Address)
         ttl_seen = reply.Options.Ttl or None
-        if not status.succeeded:
-            return PingResult(status, None, reply_ip, ttl_seen)
         # RoundTripTime is whole milliseconds (0 for anything under 1 ms);
         # the measured time keeps sub-millisecond replies distinguishable.
         rtt = float(reply.RoundTripTime) if reply.RoundTripTime else min(elapsed_ms, 0.99)
+        if not status.succeeded:
+            return PingResult(status, rtt if error_rtt else None, reply_ip, ttl_seen)
         return PingResult(PingStatus.SUCCEEDED, rtt, reply_ip, ttl_seen)
     finally:
         api.close(handle)
@@ -194,13 +200,14 @@ _shared_api: _IcmpApi | None = None
 
 
 def echo(ip: str, timeout_ms: int, payload_size: int, ttl: int = 64,
-         dont_fragment: bool = True) -> PingResult:
+         dont_fragment: bool = True, error_rtt: bool = False) -> PingResult:
     """One blocking echo request outside the engine (ping/mtu.py and
     ping/tracepath.py run these on their own threads)."""
     global _shared_api
     if _shared_api is None:
         _shared_api = _IcmpApi()
-    return send_echo(_shared_api, ip, timeout_ms, payload_size, ttl, dont_fragment)
+    return send_echo(_shared_api, ip, timeout_ms, payload_size, ttl, dont_fragment,
+                     error_rtt=error_rtt)
 
 
 IF_TYPE_SOFTWARE_LOOPBACK = 24

@@ -130,6 +130,11 @@ def _load() -> ctypes.CDLL:
     dll.pcap_geterr.restype = ctypes.c_char_p
     dll.pcap_close.argtypes = [ctypes.c_void_p]
     dll.pcap_close.restype = None
+    # Npcap's own (from WinPcap): how much the driver buffers before handing
+    # packets over. Older wpcap.dll builds may lack it.
+    if hasattr(dll, "pcap_setmintocopy"):
+        dll.pcap_setmintocopy.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        dll.pcap_setmintocopy.restype = ctypes.c_int
     _dll = dll
     return dll
 
@@ -204,12 +209,18 @@ def _ipv4_addresses(node) -> list[str]:
 class Capture:
     """One adapter opened for capture, with a kernel filter."""
 
-    def __init__(self, name: str, program: ctypes.Structure) -> None:
+    def __init__(self, name: str, program: ctypes.Structure,
+                 read_timeout_ms: int = READ_TIMEOUT_MS, immediate: bool = False) -> None:
+        """`immediate` hands each packet over the moment it arrives. Without
+        it the driver holds packets until 16 KB have piled up or the read
+        timeout runs out: fine for LLDP/CDP, but it adds up to that timeout
+        to anything timed by when its packet is read (Net Path's TCP
+        probes)."""
         self._dll = _load()
         self.name = name
         errbuf = ctypes.create_string_buffer(PCAP_ERRBUF_SIZE)
         handle = self._dll.pcap_open_live(
-            name.encode(), SNAPLEN, 1, READ_TIMEOUT_MS, errbuf,
+            name.encode(), SNAPLEN, 1, read_timeout_ms, errbuf,
         )
         if not handle:
             raise NpcapError(_text(errbuf.value) or f"Npcap couldn't open {name}")
@@ -222,6 +233,8 @@ class Capture:
             # Only what arrives, like BIOCSSEESENT 0 on macOS; not every
             # adapter supports it, and what's sent isn't LLDP/CDP anyway.
             self._dll.pcap_setdirection(handle, PCAP_D_IN)
+            if immediate and hasattr(self._dll, "pcap_setmintocopy"):
+                self._dll.pcap_setmintocopy(handle, 0)
         except NpcapError:
             self.close()
             raise
@@ -230,7 +243,7 @@ class Capture:
         return _text(self._dll.pcap_geterr(self._handle)) if self._handle else "closed"
 
     def next_frame(self) -> bytes | None:
-        """The next frame, or None if none arrived within READ_TIMEOUT_MS."""
+        """The next frame, or None if none arrived within the read timeout."""
         header = ctypes.POINTER(_PcapPkthdr)()
         data = ctypes.POINTER(ctypes.c_ubyte)()
         result = self._dll.pcap_next_ex(self._handle, ctypes.byref(header), ctypes.byref(data))

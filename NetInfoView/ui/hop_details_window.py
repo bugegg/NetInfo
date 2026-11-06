@@ -66,7 +66,7 @@ class HopDetailsWindow(QWidget):
 
         self.raw = QPlainTextEdit()
         self.raw.setReadOnly(True)
-        self.raw.setFont(fonts.mono())
+        fonts.use_mono(self.raw)
         self.raw.setPlaceholderText("Raw whois output")
 
         copy = QPushButton("Copy")

@@ -179,7 +179,8 @@ def probe_windows(ip: str, ttl: int, flows: list[int], wait_ms: int = WAIT_MS) -
     from .result import PingStatus
 
     def one(flow: int) -> tuple[int, Answer | None]:
-        result = echo(ip, wait_ms, PAYLOAD + flow, ttl=ttl, dont_fragment=False)
+        result = echo(ip, wait_ms, PAYLOAD + flow, ttl=ttl, dont_fragment=False,
+                      error_rtt=True)
         if not result.reply_ip or result.status in (
                 PingStatus.TIMEOUT, PingStatus.NO_RESOURCES, PingStatus.GENERAL_FAILURE):
             return flow, None
