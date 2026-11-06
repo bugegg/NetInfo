@@ -28,7 +28,10 @@ called NetInfo up to version 1.4, and PingInfoView before that.
 
 Windows 10 or 11, 64-bit. Every feature of the Mac version works on
 Windows. **Check LLDP/CDP** also needs [Npcap](https://npcap.com) (the
-capture driver Wireshark installs); without it, that window says so. Settings
+capture driver Wireshark installs); without it, that window says so. **SSH** and
+**Telnet** (right-click a host) use [PuTTY](https://www.putty.org)'s `plink`,
+which comes with NetInfoView, so neither needs Windows' own Telnet Client or
+OpenSSH, and old network gear's algorithms work without a prompt. Settings
 are kept in the registry under
 `HKEY_CURRENT_USER\Software\NetInfoView\NetInfoView`; uninstall from
 **Settings → Apps**.

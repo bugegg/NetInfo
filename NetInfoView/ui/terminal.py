@@ -1,5 +1,6 @@
 """Open an SSH or Telnet session to a host in the system's own terminal:
-Terminal.app on macOS, a console window on Windows."""
+Terminal.app on macOS (its ssh and telnet), a console window on Windows
+(PuTTY's plink, bundled with the app, for both)."""
 
 from __future__ import annotations
 
@@ -7,9 +8,11 @@ import ipaddress
 import os
 import re
 import shlex
+import shutil
 import stat
 import subprocess
 import tempfile
+from pathlib import Path, PureWindowsPath
 
 from ..osinfo import IS_WINDOWS
 
@@ -23,37 +26,41 @@ LEGACY_SSH_OPTIONS = (
     "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa",
     "-o", "Ciphers=+aes128-cbc,aes256-cbc,3des-cbc",
 )
-#: OpenSSH before 8.5 (Windows 10 ships 7.7 or 8.1) calls
-#: PubkeyAcceptedAlgorithms PubkeyAcceptedKeyTypes, and refuses to start
-#: at all on an option it doesn't know.
-_RENAMED_IN_8_5 = ("PubkeyAcceptedAlgorithms=", "PubkeyAcceptedKeyTypes=")
-_OPENSSH_VERSION = re.compile(r"OpenSSH\w*?_(\d+)\.(\d+)")
-_ssh_version: tuple[int, int] | None = None
+
+#: plink, shipped next to the app's other data by build_windows.ps1 (PuTTY,
+#: MIT licence; see PuTTY-LICENCE.txt beside it). Windows has no telnet
+#: unless the user turns the feature on, and Windows 10's OpenSSH is too old
+#: for some of LEGACY_SSH_OPTIONS; plink does both, old algorithms included.
+BUNDLED_PLINK = Path(__file__).resolve().parent.parent / "putty" / "plink.exe"
+#: The saved PuTTY session plink loads (HKCU\Software\SimonTatham\PuTTY\
+#: Sessions\NetInfoView): every algorithm on, old ones above the "warn
+#: below here" line, so old network gear connects without a prompt.
+PUTTY_SESSION = "NetInfoView"
+PUTTY_SETTINGS = {
+    "Cipher": "aes,chacha20,aesgcm,3des,WARN,des,blowfish,arcfour",
+    "KEX": "ntru-curve25519,mlkem-curve25519,mlkem-nist,ecdh,dh-group18-sha512,"
+           "dh-group17-sha512,dh-group16-sha512,dh-group15-sha512,dh-gex-sha1,"
+           "dh-group14-sha1,dh-group1-sha1,rsa,WARN",
+    "HostKey": "ed25519,ed448,ecdsa,rsa,dsa,WARN",
+}
 
 
-def ssh_version() -> tuple[int, int] | None:
-    """The installed OpenSSH client's (major, minor), from `ssh -V`; None
-    if there's no ssh or it can't be told. Asked once."""
-    global _ssh_version
-    if _ssh_version is None:
-        try:
-            out = subprocess.run(
-                ["ssh", "-V"], capture_output=True, text=True, timeout=5,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            match = _OPENSSH_VERSION.search(out.stderr + out.stdout)
-            _ssh_version = (int(match[1]), int(match[2])) if match else (0, 0)
-        except (OSError, subprocess.SubprocessError):
-            _ssh_version = (0, 0)
-    return _ssh_version if _ssh_version != (0, 0) else None
+def plink_path() -> str:
+    """The bundled plink.exe, else one on the PATH (running from source)."""
+    if BUNDLED_PLINK.is_file():
+        return str(BUNDLED_PLINK)
+    return shutil.which("plink") or "plink"
 
 
-def legacy_ssh_options(version: tuple[int, int] | None) -> list[str]:
-    """LEGACY_SSH_OPTIONS, spelt for OpenSSH `version` (None: current)."""
-    if version is None or version >= (8, 5):
-        return list(LEGACY_SSH_OPTIONS)
-    old, new = _RENAMED_IN_8_5
-    return [option.replace(old, new) for option in LEGACY_SSH_OPTIONS]
+def save_putty_session() -> None:
+    """Write PUTTY_SETTINGS into the NetInfoView PuTTY session (Windows)."""
+    import winreg
+
+    path = rf"Software\SimonTatham\PuTTY\Sessions\{PUTTY_SESSION}"
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as key:
+        for name, value in PUTTY_SETTINGS.items():
+            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+
 
 _USERNAME = re.compile(r"^[A-Za-z0-9._@\\-]{1,64}$")
 
@@ -66,17 +73,21 @@ def ssh_command(ip: str, username: str = "") -> list[str]:
     ipaddress.ip_address(ip)  # only ever an address, never shell text
     if username and not valid_username(username):
         raise ValueError(f"Not a valid user name: {username!r}")
+    if IS_WINDOWS:
+        user = ["-l", username] if username else []  # else plink asks "login as:"
+        return [plink_path(), "-load", PUTTY_SESSION, "-ssh", *user, ip]
     target = f"{username}@{ip}" if username else ip
-    return ["ssh", *legacy_ssh_options(ssh_version()), target]
+    return ["ssh", *LEGACY_SSH_OPTIONS, target]
 
 
 def telnet_command(ip: str) -> list[str]:
     """`-K`: no automatic login. Without it macOS's telnet offers the
     device Kerberos and, with no realm set up, prints "Kerberos: No default
-    realm defined" right after a Cisco's Password: prompt. Windows' telnet
-    has no such option and needs none."""
+    realm defined" right after a Cisco's Password: prompt."""
     ipaddress.ip_address(ip)
-    return ["telnet", ip] if IS_WINDOWS else ["telnet", "-K", ip]
+    if IS_WINDOWS:
+        return [plink_path(), "-load", PUTTY_SESSION, "-telnet", ip]
+    return ["telnet", "-K", ip]
 
 
 #: A session that fails sooner than this was most likely refused or timed
@@ -138,14 +149,8 @@ def macos_script(command: list[str]) -> str:
     )
 
 
-#: Where to get each program on Windows, where neither is a given: the
-#: Telnet Client is off by default, and OpenSSH Client can be removed.
-_WINDOWS_HINTS = {
-    "telnet": "Turn on Telnet Client: Control Panel > Programs > Turn Windows features "
-              "on or off, or run as administrator: dism /online /Enable-Feature "
-              "/FeatureName:TelnetClient",
-    "ssh": "Add OpenSSH Client: Settings > System > Optional features",
-}
+#: Only when running from source: the installed app has its own plink.
+_WINDOWS_HINTS = {"plink": "Install PuTTY (https://www.putty.org), or reinstall NetInfoView."}
 
 
 def _ps_quote(text: str) -> str:
@@ -157,11 +162,12 @@ def windows_script(command: list[str]) -> str:
     program isn't installed, and a window that closes when the session
     ends, unless it failed straight away (so the error can be read)."""
     program = command[0]
-    hint = _WINDOWS_HINTS.get(program, f"Install {program}.")
+    name = PureWindowsPath(program).stem if program.lower().endswith(".exe") else program
+    hint = _WINDOWS_HINTS.get(name, f"Install {name}.")
     wait = "Write-Host 'Press any key to close.'; [void][Console]::ReadKey($true)"
     return (
         f"if (-not (Get-Command {_ps_quote(program)} -ErrorAction SilentlyContinue)) {{ "
-        f"Write-Host {_ps_quote(f'{program} is not installed. {hint}')}; {wait}; exit 1 }}; "
+        f"Write-Host {_ps_quote(f'{name} is not installed. {hint}')}; {wait}; exit 1 }}; "
         "$started = [Diagnostics.Stopwatch]::StartNew(); "
         f"& {' '.join(_ps_quote(word) for word in command)}; "
         f"if ($LASTEXITCODE -ne 0 -and $started.Elapsed.TotalSeconds -lt {QUICK_FAILURE_SECONDS}) "
@@ -172,6 +178,10 @@ def windows_script(command: list[str]) -> str:
 def open_in_terminal(command: list[str]) -> None:
     """Run `command` in a new terminal window, and return straight away."""
     if IS_WINDOWS:
+        try:
+            save_putty_session()
+        except OSError:
+            pass  # plink still runs, only asking about old algorithms
         subprocess.Popen(
             ["powershell", "-NoLogo", "-NoProfile", "-Command", windows_script(command)],
             creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),

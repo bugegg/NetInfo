@@ -7,7 +7,8 @@ from NetInfoView.ui import terminal
 from test_main_window import window, qapp, _entries_with_statuses  # noqa: F401
 
 
-def test_ssh_command_allows_legacy_algorithms_for_old_network_gear():
+def test_ssh_command_allows_legacy_algorithms_for_old_network_gear(monkeypatch):
+    monkeypatch.setattr(terminal, "IS_WINDOWS", False)
     command = terminal.ssh_command("10.0.0.1", "admin")
     assert command[0] == "ssh" and command[-1] == "admin@10.0.0.1"
     assert "HostKeyAlgorithms=+ssh-rsa" in command
@@ -51,6 +52,7 @@ def test_macos_script_closes_its_window_when_the_session_ends():
 
 
 def test_menu_actions_open_the_selected_host(window, monkeypatch):
+    monkeypatch.setattr(terminal, "IS_WINDOWS", False)
     opened = []
     monkeypatch.setattr(terminal, "open_in_terminal", opened.append)
     monkeypatch.setattr(window.settings, "save", lambda: None)
@@ -72,41 +74,54 @@ def test_telnet_skips_automatic_login_on_macos(monkeypatch):
     """Else macOS telnet tries Kerberos and prints an error at the prompt."""
     monkeypatch.setattr(terminal, "IS_WINDOWS", False)
     assert terminal.telnet_command("10.0.0.1") == ["telnet", "-K", "10.0.0.1"]
+
+
+def test_windows_uses_the_bundled_plink_for_ssh_and_telnet(monkeypatch, tmp_path):
+    plink = tmp_path / "putty" / "plink.exe"
+    plink.parent.mkdir()
+    plink.write_bytes(b"")
     monkeypatch.setattr(terminal, "IS_WINDOWS", True)
-    assert terminal.telnet_command("10.0.0.1") == ["telnet", "10.0.0.1"]
+    monkeypatch.setattr(terminal, "BUNDLED_PLINK", plink)
+    session = ["-load", terminal.PUTTY_SESSION]
+    assert terminal.telnet_command("10.0.0.1") == [str(plink), *session, "-telnet", "10.0.0.1"]
+    assert terminal.ssh_command("10.0.0.1", "admin") == [
+        str(plink), *session, "-ssh", "-l", "admin", "10.0.0.1"]
+    assert terminal.ssh_command("10.0.0.1")[-2:] == ["-ssh", "10.0.0.1"]  # plink asks the name
 
 
-def test_old_openssh_gets_the_old_name_for_accepted_key_types():
-    """Windows 10's OpenSSH 8.1 won't start on PubkeyAcceptedAlgorithms."""
-    old = terminal.legacy_ssh_options((8, 1))
-    assert "PubkeyAcceptedKeyTypes=+ssh-rsa" in old
-    assert not any("PubkeyAcceptedAlgorithms" in o for o in old)
-    assert "PubkeyAcceptedAlgorithms=+ssh-rsa" in terminal.legacy_ssh_options((9, 5))
-    assert terminal.legacy_ssh_options(None) == list(terminal.LEGACY_SSH_OPTIONS)
+def test_plink_falls_back_to_one_on_the_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(terminal, "BUNDLED_PLINK", tmp_path / "missing.exe")
+    monkeypatch.setattr(terminal.shutil, "which", lambda name: r"C:\PuTTY\plink.exe")
+    assert terminal.plink_path() == r"C:\PuTTY\plink.exe"
 
 
-def test_ssh_version_is_read_from_ssh_dash_v(monkeypatch):
-    import subprocess
-
-    class Out:
-        stdout, stderr = "", "OpenSSH_for_Windows_8.1p1, LibreSSL 3.0.2\n"
-
-    monkeypatch.setattr(terminal, "_ssh_version", None)
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Out())
-    assert terminal.ssh_version() == (8, 1)
-    monkeypatch.setattr(terminal, "_ssh_version", None)
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError()))
-    assert terminal.ssh_version() is None
+def test_putty_session_allows_old_algorithms_without_asking():
+    """Old Cisco/HPE gear: dh-group1-sha1, 3des, ssh-rsa/dsa sit above
+    PuTTY's WARN line, so plink connects without a "below threshold" prompt."""
+    settings = terminal.PUTTY_SETTINGS
+    for name, old in (("KEX", "dh-group1-sha1"), ("Cipher", "3des"), ("HostKey", "dsa")):
+        order = settings[name].split(",")
+        assert order.index(old) < order.index("WARN"), name
+    assert settings["KEX"].split(",")[-1] == "WARN"
 
 
 def test_windows_script_hints_closes_and_keeps_quick_failures_readable():
-    script = terminal.windows_script(["telnet", "10.0.0.1"])
-    assert "dism /online /Enable-Feature /FeatureName:TelnetClient" in script
-    assert "& 'telnet' '10.0.0.1';" in script
+    script = terminal.windows_script([r"C:\Program Files\NetInfoView\plink.exe", "-telnet", "10.0.0.1"])
+    assert "plink is not installed. Install PuTTY" in script
+    assert r"& 'C:\Program Files\NetInfoView\plink.exe' '-telnet' '10.0.0.1';" in script
     assert "Press any key to close." in script
     # A DOMAIN\user name and a quote can't break out of PowerShell's quoting.
-    assert "'CORP\\bob@10.0.0.1'" in terminal.windows_script(["ssh", "CORP\\bob@10.0.0.1"])
+    assert "'CORP\\bob'" in terminal.windows_script(["plink", "-l", "CORP\\bob", "10.0.0.1"])
     assert terminal._ps_quote("it's") == "'it''s'"
+
+
+@pytest.mark.skipif(not terminal.IS_WINDOWS, reason="writes the Windows registry")
+def test_putty_session_is_saved_to_the_registry():
+    import winreg
+    terminal.save_putty_session()
+    path = rf"Software\SimonTatham\PuTTY\Sessions\{terminal.PUTTY_SESSION}"
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+        assert winreg.QueryValueEx(key, "KEX")[0] == terminal.PUTTY_SETTINGS["KEX"]
 
 
 @pytest.mark.skipif(not terminal.IS_WINDOWS, reason="runs Windows PowerShell")
