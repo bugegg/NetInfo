@@ -64,6 +64,10 @@ class Settings:
     snmp_community: str = "public"
     #: The user name last used for SSH from the right-click menu.
     ssh_username: str = ""
+    #: Speed Test's server: a server's URL ("" for Cloudflare), or a custom URL.
+    speed_test_server: str = ""
+    #: Speed Test's length per direction, in seconds.
+    speed_test_seconds: float = 10.0
 
     # -- grid ----------------------------------------------------------------
     display_mode: DisplayMode = DisplayMode.ALL
