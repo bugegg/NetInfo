@@ -32,6 +32,14 @@ def offline_server_list(monkeypatch):
     monkeypatch.setattr(device_link, "device_link", lambda: LINK)
     # No logos from the network: each site "has none", known from the cache.
     monkeypatch.setattr(logos, "cached", lambda domain, folder=None: (True, None))
+    yield
+    # Windows a test didn't close keep their background threads running;
+    # stop them while the fakes are still in place (not the real tools).
+    from NetInfoView.ui import threads
+    for window in QApplication.topLevelWidgets():
+        if isinstance(window, SpeedTestWindow):
+            window.close()
+    threads.stop_all(10000)
 
 
 def _wait(cond, timeout=10.0):
@@ -318,6 +326,29 @@ def test_device_card_updates_live(qapp, monkeypatch):
     thread = w._device_thread
     w.close()
     _wait(lambda: thread.isFinished(), 5)
+
+
+def test_offline_stays_offline_when_the_wifi_is_up(qapp, monkeypatch):
+    from NetInfoView.ui.speedtest_window import DeviceThread
+    monkeypatch.setattr(DeviceThread, "INTERVAL_S", 0.05)
+    monkeypatch.setattr(provider, "fetch_provider", lambda: (False, None))
+    w = SpeedTestWindow()
+    _wait(lambda: w._provider_thread is None and w._link is not None)
+    for _ in range(20):  # more Wi-Fi reads arrive after the provider's answer
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert "Offline" in w.connection.text()
+    w.close()
+
+
+def test_coming_back_online_rechecks_the_provider(qapp, monkeypatch):
+    from NetInfoView.ui.speedtest_window import DeviceThread
+    monkeypatch.setattr(DeviceThread, "INTERVAL_S", 0.05)
+    answers = iter([(False, None)] + [(True, PROVIDER)] * 50)
+    monkeypatch.setattr(provider, "fetch_provider", lambda: next(answers))
+    w = SpeedTestWindow()
+    _wait(lambda: "Wi-Fi connected" in w.connection.text() and w.provider_name.text() == "AIS", 5)
+    w.close()
 
 
 def test_dropped_link_shows_offline(qapp, monkeypatch):

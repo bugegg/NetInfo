@@ -886,7 +886,7 @@ class SpeedTestWindow(QWidget):
         self._scale = 1.0
         self._apply_theme()
         self._set_status("idle", "Ready")
-        self._show_connection(None)
+        self._show_connection()
         self.set_choice(CLOUDFLARE)
         self._restore_choice()
         self._list_thread: ServerListThread | None = None
@@ -959,15 +959,24 @@ class SpeedTestWindow(QWidget):
         self._device_thread = thread
         thread.start()
 
-    def _show_connection(self, online: bool | None, kind: str = "") -> None:
-        if online is None:
+    def _show_connection(self, online: bool | None = None, kind: str | None = None) -> None:
+        """The pill: Offline unless both the Internet answered (`online`,
+        from the provider lookup) and this device's link is up; then which
+        kind of link. Either argument left out keeps what's known."""
+        if online is not None or not hasattr(self, "_online"):
+            self._online = online
+        if kind is not None:
+            self._kind = kind
+        link = getattr(self, "_link", None)
+        link_down = link is not None and not link.connected
+        if link_down or self._online is False:
+            text, color, tone = "Offline", RED, "bad"
+        elif self._online is None:
             text, color, tone = "Checking…", self.theme["muted"], "idle"
-        elif online:
+        else:
+            kind = getattr(self, "_kind", "")
             text = f"{kind} connected" if kind in ("Wi-Fi", "Ethernet") else "Connected"
             color, tone = GREEN, "ok"
-        else:
-            text, color, tone = "Offline", RED, "bad"
-        self._online, self._kind = online, kind
         self.connection.setProperty("tone", tone)
         self.connection.style().unpolish(self.connection)
         self.connection.style().polish(self.connection)
@@ -978,7 +987,7 @@ class SpeedTestWindow(QWidget):
         if self._gone():
             return
         self._provider_thread = None
-        self._show_connection(online, getattr(self, "_kind", ""))
+        self._show_connection(online)
         self._public_ipv4 = found.ipv4 if found is not None else ""
         self._public_ipv6 = found.ipv6 if found is not None else ""
         if found is not None and found.name:
@@ -1060,12 +1069,10 @@ class SpeedTestWindow(QWidget):
             self.signal_label.setToolTip("")
             for w in (self.signal_icon, self.signal_label, self._signal_rule):
                 w.setVisible(bool(link.kind))
-        if not link.connected:
-            self._show_connection(False)  # the link dropped since the last read
-        elif self._provider_thread is None and getattr(self, "_online", None) is not None:
-            self._show_connection(True, link.kind)  # also back after dropping
-        else:
-            self._kind = link.kind
+        self._show_connection(kind=link.kind)  # a dropped link shows Offline
+        # Back online after being offline: ask who provides it again.
+        if link.connected and self._online is False and self._provider_thread is None:
+            self.find_provider()
 
     def _copy_text(self, text: str) -> None:
         if text:
