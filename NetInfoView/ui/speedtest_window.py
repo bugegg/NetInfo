@@ -1047,10 +1047,11 @@ class SpeedTestWindow(QWidget):
         self.network_icon.setPixmap(glyphs.pixmap("wifi" if link.wifi else "cable", BLUE, 18))
         self.network_name.setToolTip("")
         if link.wifi:
-            self.network_name.setText(link.ssid or "Wi-Fi network")
-            self.network_name.setToolTip(
-                "" if link.ssid else "macOS shows the Wi-Fi network's name only to apps "
-                "allowed to use Location Services")
+            # "Wi-Fi network" on every system, as macOS shows it (it hides the
+            # name from apps without Location Services); the name, if known,
+            # is in the tooltip.
+            self.network_name.setText("Wi-Fi network")
+            self.network_name.setToolTip(link.ssid)
             self.band_tag.setText(link.band)
             self.band_tag.setVisible(bool(link.band))
             label, bars = strength(link)
