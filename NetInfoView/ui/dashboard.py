@@ -596,6 +596,10 @@ class Dashboard(QWidget):
         self.nav_port_scan = self._tool_button("Port Scan", "portscan", "navButton",
                                                w.action_port_scan)
         nav.addWidget(self.nav_port_scan)
+        # Speed Test measures the Internet connection, nPerf-style.
+        self.nav_speed_test = self._tool_button("Speed Test", "speed", "navButton",
+                                                w.action_speed_test)
+        nav.addWidget(self.nav_speed_test)
         # Settings opens Options straight away; the view toggles (dark
         # background, font, lower pane, ...) stay on the grid's right-click menu.
         self.nav_settings = self._tool_button("Settings", "settings", "navButton", w.action_options)

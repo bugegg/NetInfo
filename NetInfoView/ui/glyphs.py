@@ -21,6 +21,25 @@ _PATHS = {
     "repeatping": '<path d="M3 12h4l2-5 3 10 2-5h7"/><path d="m18 9 3 3-3 3"/>',
     "portscan": '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10M12 16v4"/>'
                 '<path d="M7 8v4M10 8v4M14 8v4M17 8v4"/>',
+    "speed": '<path d="M3.34 19a10 10 0 1 1 17.32 0"/><path d="m12 14 4-4"/>',
+    "download": '<path d="M12 4v15M6 13l6 6 6-6"/>',
+    "upload": '<path d="M12 20V5M6 11l6-6 6 6"/>',
+    "copy": '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
+    "info": '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+    "check": '<circle cx="12" cy="12" r="10" fill="{c}"/><path d="m8 12 3 3 5-6" stroke="#ffffff"/>',
+    "globe": '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+    "link": '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    "close": '<path d="M18 6 6 18M6 6l12 12"/>',
+    "laptop": '<rect x="4" y="4" width="16" height="11" rx="1.5"/><path d="M2 19h20l-1.5-2.5h-17z"/>',
+    "wifi": '<path d="M2 8.8a15 15 0 0 1 20 0M5 12.4a10 10 0 0 1 14 0M8.5 15.9a5 5 0 0 1 7 0"/>'
+            '<circle cx="12" cy="19.2" r="1.3" fill="{c}"/>',
+    "ethernet": '<rect x="3" y="7" width="18" height="12" rx="2"/><path d="M8 7V4h8v3M7 12v3M10 12v3M14 12v3M17 12v3"/>',
+    "rj45": '<rect x="3" y="5" width="18" height="12" rx="1.5"/><path d="M7 17v2h10v-2M7 9v3M10 9v3M14 9v3M17 9v3"/>',
+    "cable": '<rect x="2" y="9" width="20" height="6" rx="3"/><path d="M6 12h12"/>',
+    "dot": '<circle cx="12" cy="12" r="6" fill="{c}" stroke="none"/>',
+    "eye": '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    "eyeoff": '<path d="M3 3l18 18M10.6 5.1A10.7 10.7 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.1'
+              'M6.6 6.6C3.9 8.4 2 12 2 12s3.6 7 10 7a9.6 9.6 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
     "settings": '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08'
                 'a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74'
                 'l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73'

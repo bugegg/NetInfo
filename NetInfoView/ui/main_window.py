@@ -60,6 +60,7 @@ from .netpath_window import NetPathThread, NetPathWindow
 from .route_monitor_window import RouteMonitorWindow
 from .port_scan_window import PortScanThread, PortScanWindow
 from .repeat_ping_window import RepeatPingThread, RepeatPingWindow
+from .speedtest_window import SpeedTestThread, SpeedTestWindow
 from .snmp_test_window import SnmpTestWindow
 from .tracepath_window import TracepathThread, TracepathWindow
 from .ping_graph import PingGraphWindow
@@ -349,6 +350,13 @@ class MainWindow(QMainWindow):
         self.action_port_scan.setShortcut(QKeySequence("Ctrl+P"))
         self.action_port_scan.setToolTip("Find which TCP ports the selected host has open")
         self.action_port_scan.triggered.connect(self.port_scan)
+
+        self.action_speed_test = QAction("Speed &Test", self)
+        self.action_speed_test.setShortcut(QKeySequence("Ctrl+Shift+T"))
+        self.action_speed_test.setToolTip(
+            "Measure the Internet connection's download, upload, ping and jitter"
+        )
+        self.action_speed_test.triggered.connect(self.speed_test)
 
         self.action_route_monitor = QAction("Ping &Monitor", self)
         self.action_route_monitor.setShortcut(QKeySequence("Ctrl+R"))
@@ -831,6 +839,15 @@ class MainWindow(QMainWindow):
         for a target to be typed; it starts when Ping is pressed."""
         entry = next((e for e in self._selected_entries() if e.ip_address), None)
         window = RepeatPingWindow(entry.ip_address if entry else "", self)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        return window
+
+    def speed_test(self) -> SpeedTestWindow:
+        """The Speed Test window (one at a time); it starts when Start is
+        pressed, since a run moves a lot of data."""
+        window = next(iter(self.findChildren(SpeedTestWindow)), None) or SpeedTestWindow(self)
         window.show()
         window.raise_()
         window.activateWindow()
@@ -1465,6 +1482,8 @@ class MainWindow(QMainWindow):
             window.close()
         for window in self.findChildren(RepeatPingWindow):
             window.close()
+        for window in self.findChildren(SpeedTestWindow):
+            window.close()
         for thread in QCoreApplication.instance().findChildren(TracepathThread):
             thread.wait(3000)
         for thread in QCoreApplication.instance().findChildren(NetPathThread):
@@ -1474,6 +1493,8 @@ class MainWindow(QMainWindow):
         for thread in QCoreApplication.instance().findChildren(PortScanThread):
             thread.wait(3000)
         for thread in QCoreApplication.instance().findChildren(RepeatPingThread):
+            thread.wait(3000)
+        for thread in QCoreApplication.instance().findChildren(SpeedTestThread):
             thread.wait(3000)
         self._vendor_db.close()
         self.settings.save()
