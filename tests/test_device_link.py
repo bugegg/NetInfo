@@ -4,7 +4,8 @@ from NetInfoView.ping.device_link import DeviceLink, strength
 AIRPORT = {"SPAirPortDataType": [{"spairport_airport_interfaces": [
     {"_name": "en0", "spairport_current_network_information": {
         "_name": "<redacted>", "spairport_network_channel": "40 (5GHz, 160MHz)",
-        "spairport_network_rate": 1297, "spairport_signal_noise": "-58 dBm / -93 dBm"}},
+        "spairport_network_rate": 1297, "spairport_network_phymode": "802.11ax",
+        "spairport_signal_noise": "-58 dBm / -93 dBm"}},
     {"_name": "awdl0", "spairport_current_network_information": {}},
 ]}]}
 
@@ -27,7 +28,8 @@ There is 1 interface on the system:
 
 def test_parse_airport_hides_a_redacted_name():
     assert dl.parse_airport(AIRPORT, "en0") == {
-        "link_mbps": 1297.0, "channel": "40", "band": "5 GHz", "signal_dbm": -58}
+        "link_mbps": 1297.0, "channel": "40", "band": "5 GHz", "phy": "802.11ax",
+        "signal_dbm": -58}
     assert dl.parse_airport(AIRPORT, "awdl0") == {}
     assert dl.parse_airport({}, "en0") == {}
 
@@ -48,8 +50,8 @@ def test_default_interface_and_ethernet_speed():
 
 def test_parse_netsh_wlan():
     assert dl.parse_netsh_wlan(NETSH) == {
-        "ssid": "Home Network", "band": "5 GHz", "channel": "36", "signal_percent": 86,
-        "link_mbps": 1201.0}
+        "ssid": "Home Network", "band": "5 GHz", "phy": "802.11ax", "channel": "36",
+        "signal_percent": 86, "link_mbps": 1201.0}
 
 
 def test_windows_adapter_parsing():
@@ -112,4 +114,14 @@ NETSH_THAI = """
 
 def test_parse_netsh_wlan_in_another_language():
     assert dl.parse_netsh_wlan(NETSH_THAI) == {
-        "ssid": "Home Network", "band": "5 GHz", "signal_percent": 86, "link_mbps": 1201.0}
+        "ssid": "Home Network", "band": "5 GHz", "phy": "802.11ax", "signal_percent": 86,
+        "link_mbps": 1201.0}
+
+
+def test_wifi_generation():
+    assert dl.wifi_generation("802.11ax") == "Wi-Fi 6"
+    assert dl.wifi_generation("802.11ax", "6 GHz") == "Wi-Fi 6E"
+    assert dl.wifi_generation("802.11be", "6 GHz") == "Wi-Fi 7"
+    assert [dl.wifi_generation(f"802.11{x}") for x in ("b", "a", "g", "n", "ac")] == [
+        f"Wi-Fi {n}" for n in range(1, 6)]
+    assert dl.wifi_generation("") == dl.wifi_generation("802.11zz") == ""

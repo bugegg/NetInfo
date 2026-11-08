@@ -29,6 +29,7 @@ class DeviceLink:
     link_mbps: float | None = None
     ssid: str = ""             # "" when unknown or hidden
     band: str = ""             # "5 GHz"
+    phy: str = ""              # "802.11ax"
     channel: str = ""
     signal_dbm: int | None = None
     signal_percent: int | None = None  # Windows reports a percentage
@@ -43,6 +44,21 @@ class DeviceLink:
     @property
     def connected(self) -> bool:
         return bool(self.local_ip)
+
+
+_GENERATIONS = {"b": "1", "a": "2", "g": "3", "n": "4", "ac": "5", "ax": "6", "be": "7"}
+
+
+def wifi_generation(phy: str, band: str = "") -> str:
+    """"Wi-Fi 6" for "802.11ax" (the Wi-Fi Alliance's numbering, 1-7);
+    802.11ax on 6 GHz is "Wi-Fi 6E". "" when it isn't known."""
+    match = re.search(r"802\.11\s*([a-z]+)", phy.lower())
+    number = _GENERATIONS.get(match.group(1)) if match else None
+    if number is None:
+        return ""
+    if number == "6" and band.startswith("6"):
+        return "Wi-Fi 6E"
+    return f"Wi-Fi {number}"
 
 
 def strength(link: DeviceLink) -> tuple[str, int]:
@@ -134,6 +150,9 @@ def parse_airport(data: object, interface: str) -> dict:
             band = re.search(r"(\d+(?:\.\d+)?)\s*GHz", channel)
             if band:
                 out["band"] = f"{band.group(1)} GHz"
+        phy = str(current.get("spairport_network_phymode") or "")
+        if phy.startswith("802.11"):
+            out["phy"] = phy
         signal = re.match(r"\s*(-?\d+)\s*dBm", str(current.get("spairport_signal_noise") or ""))
         if signal:
             out["signal_dbm"] = int(signal.group(1))
@@ -193,8 +212,8 @@ def windows_speed_mbps(link_speed: object) -> float | None:
 
 
 def parse_netsh_wlan(output: str) -> dict:
-    """``netsh wlan show interfaces``: SSID, band, channel, signal %, and the
-    receive rate. Windows translates the labels ("Signal" is "สัญญาณ" in
+    """``netsh wlan show interfaces``: SSID, band, radio type (802.11ax),
+    channel, signal %, and the receive rate. Windows translates the labels ("Signal" is "สัญญาณ" in
     Thai), so where the English label isn't there, the values are told
     apart by their form: "86%" is the signal, "5 GHz" the band, and the
     first label with "(Mbps)" in it the receive rate."""
@@ -217,6 +236,10 @@ def parse_netsh_wlan(output: str) -> dict:
     band_match = re.search(r"(\d+(?:\.\d+)?)\s*GHz", band)
     if band_match:
         out["band"] = f"{band_match.group(1)} GHz"
+    phy = labelled("radio type") or next(
+        (v for _, v in pairs if re.fullmatch(r"802\.11\s*[a-z]+", v)), "")
+    if phy:
+        out["phy"] = phy
     channel = labelled("channel")
     if channel:
         out["channel"] = channel
@@ -258,7 +281,7 @@ def _windows() -> DeviceLink:
                       local_ip=ip, **fields)
 
 
-_WIFI_FIELDS = ("link_mbps", "band", "channel", "signal_dbm", "signal_percent", "ssid")
+_WIFI_FIELDS = ("link_mbps", "band", "phy", "channel", "signal_dbm", "signal_percent", "ssid")
 
 
 def carry_over(previous: DeviceLink | None, current: DeviceLink) -> DeviceLink:
