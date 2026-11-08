@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import socket
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -64,12 +65,12 @@ def wifi_generation(phy: str, band: str = "") -> str:
 
 
 def rssi_text(link: DeviceLink) -> str:
-    """"-57 dBm"; from a Windows signal percentage only an estimate,
-    "≈ -57 dBm" (Windows maps -100..-50 dBm onto 0..100 %)."""
+    """"-57 dBm"; from a Windows signal percentage an estimate (Windows
+    maps -100..-50 dBm onto 0..100 %)."""
     if link.signal_dbm is not None:
         return f"{link.signal_dbm} dBm"
     if link.signal_percent is not None:
-        return f"≈ {round(link.signal_percent / 2 - 100)} dBm"
+        return f"{round(link.signal_percent / 2 - 100)} dBm"
     return ""
 
 
@@ -223,6 +224,48 @@ def windows_speed_mbps(link_speed: object) -> float | None:
     return bits / 1e6 if bits > 0 else None
 
 
+def decode_netsh(raw: bytes) -> str:
+    """netsh writes its labels in the console's code page but the network
+    name as the router sent it, usually UTF-8 (emoji, Thai): each line is
+    read as UTF-8 if it is, else in the code page."""
+    fallback = "mbcs" if IS_WINDOWS else "latin-1"
+    lines = []
+    for line in raw.splitlines():
+        try:
+            lines.append(line.decode("utf-8"))
+        except UnicodeDecodeError:
+            lines.append(line.decode(f"cp{_oem_code_page()}" if IS_WINDOWS else fallback,
+                                     errors="replace"))
+    return "\n".join(lines)
+
+
+def _oem_code_page() -> int:
+    try:
+        import ctypes
+        return ctypes.windll.kernel32.GetConsoleOutputCP() or ctypes.windll.kernel32.GetOEMCP()
+    except Exception:
+        return 437
+
+
+def _netsh_wlan() -> str:
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        raw = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True,
+                             timeout=10, creationflags=flags).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return decode_netsh(raw)
+
+
+def band_of_channel(channel: str) -> str:
+    """Older Windows lists no band: channels 1-14 are 2.4 GHz, the rest 5 GHz
+    (6 GHz networks come with a Windows that names the band)."""
+    match = re.match(r"\d+", channel)
+    if not match:
+        return ""
+    return "2.4 GHz" if int(match.group()) <= 14 else "5 GHz"
+
+
 def parse_netsh_wlan(output: str) -> dict:
     """``netsh wlan show interfaces``: SSID, band, radio type (802.11ax),
     channel, signal %, and the receive rate. Windows translates the labels ("Signal" is "สัญญาณ" in
@@ -252,9 +295,11 @@ def parse_netsh_wlan(output: str) -> dict:
         (v for _, v in pairs if re.fullmatch(r"802\.11\s*[a-z]+", v)), "")
     if phy:
         out["phy"] = phy
-    channel = labelled("channel")
+    channel = labelled("channel", "ช่องสัญญาณ")
     if channel:
         out["channel"] = channel
+        if "band" not in out and band_of_channel(channel):
+            out["band"] = band_of_channel(channel)
     rssi = re.fullmatch(r"(-\d+)(?:\s*dBm)?", labelled("rssi"))  # Windows 11 lists it
     if rssi:
         out["signal_dbm"] = int(rssi.group(1))
@@ -305,7 +350,7 @@ def _windows() -> DeviceLink:
         return DeviceLink()
     # netsh runs alongside PowerShell, so a first read waits for the slower one only.
     with ThreadPoolExecutor(max_workers=1) as pool:
-        wlan = pool.submit(run_quietly, ["netsh", "wlan", "show", "interfaces"], 10)
+        wlan = pool.submit(_netsh_wlan)
         adapter = _cached_adapter(ip)
         netsh = wlan.result()
     media = f"{adapter.get('PhysicalMediaType', '')} {adapter.get('MediaType', '')}".lower()
