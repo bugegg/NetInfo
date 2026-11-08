@@ -1037,10 +1037,11 @@ class SpeedTestWindow(QWidget):
         self.link_speed.setText(format_link(link.link_mbps))
         # Wi-Fi shows its network, band and signal; a cable its adapter,
         # duplex and whether the link is up.
-        # Wi-Fi names the standard in use ("Wi-Fi 6" for 802.11ax) when known.
+        # Wi-Fi names the standard in use ("Wi-Fi 6 (802.11ax)") when known.
         generation = wifi_generation(link.phy, link.band) if link.wifi else ""
+        if generation:
+            generation = f"{generation} ({link.phy.replace(' ', '')})"
         self.device_tag.setText("LAN" if link.kind == "Ethernet" else generation or link.kind or "")
-        self.device_tag.setToolTip(link.phy if generation else "")
         self.device_tag.setVisible(bool(link.kind))
         self.link_icon.setPixmap(glyphs.pixmap("wifi" if link.wifi else "rj45", BLUE, 26))
         self.network_icon.setPixmap(glyphs.pixmap("wifi" if link.wifi else "cable", BLUE, 18))
