@@ -1652,11 +1652,8 @@ class SpeedTestWindow(QWidget):
         for card in (self.card_down, self.card_up, self.card_ping, self.card_jitter):
             card.note.setVisible(roomy)
         self.provider_badge.set_size(46 if roomy else 34)
-        # A short window keeps only the cards' main row.
-        self._device_rule.setVisible(roomy)
-        self._network_row.setVisible(roomy)
-        for head in self._section_heads:
-            head.setVisible(roomy)
+        # The cards keep their headings and the network row at every size,
+        # so a short window (Windows at 125-150 % scaling) looks like a tall one.
         scale = self.scale_for(w, h)
         if scale == self._scale:
             return
