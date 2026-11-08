@@ -125,3 +125,15 @@ def test_wifi_generation():
     assert [dl.wifi_generation(f"802.11{x}") for x in ("b", "a", "g", "n", "ac")] == [
         f"Wi-Fi {n}" for n in range(1, 6)]
     assert dl.wifi_generation("") == dl.wifi_generation("802.11zz") == ""
+
+
+def test_windows_adapter_is_cached_until_stale_or_the_address_changes(monkeypatch):
+    calls = []
+    monkeypatch.setattr(dl, "_windows_adapter", lambda ip: calls.append(ip) or {"Name": ip})
+    monkeypatch.setattr(dl, "_adapter_cache", {"ip": "", "at": 0.0, "adapter": {}})
+    assert dl._cached_adapter("10.0.0.2", now=100.0) == {"Name": "10.0.0.2"}
+    dl._cached_adapter("10.0.0.2", now=100.0 + dl.ADAPTER_TTL_S - 1)
+    assert calls == ["10.0.0.2"]
+    dl._cached_adapter("10.0.0.3", now=101.0)
+    dl._cached_adapter("10.0.0.3", now=101.0 + dl.ADAPTER_TTL_S)
+    assert calls == ["10.0.0.2", "10.0.0.3", "10.0.0.3"]

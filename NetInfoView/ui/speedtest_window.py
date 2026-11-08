@@ -201,7 +201,8 @@ class DeviceThread(QThread):
     found = pyqtSignal(object)  # DeviceLink, each time it's read
 
     #: Pause between reads. macOS's system_profiler itself takes ~5 s, so a
-    #: Mac updates about every 7 s; Windows' netsh answers at once.
+    #: Mac updates about every 7 s; on Windows netsh answers at once (the
+    #: slow PowerShell adapter lookup is cached), so about every 2 s.
     INTERVAL_S = 2.0
 
     def __init__(self) -> None:
@@ -950,6 +951,11 @@ class SpeedTestWindow(QWidget):
         return sip.isdeleted(self) or sip.isdeleted(self.picker) or sip.isdeleted(self.history)
 
     def find_device(self) -> None:
+        # The local address is instant; the rest of the card follows the first read.
+        if not self._local_ip:
+            self._local_ip = device_link.local_address()
+            self.local_ip.setText(self._local_ip or "–")
+            self.copy_local.setEnabled(bool(self._local_ip))
         thread = DeviceThread()
         # It reads until told to stop: the app owns it (so it outlives the
         # window's own deletion) and it stops however the window goes.

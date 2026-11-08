@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 import re
 import socket
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 
 from ..osinfo import IS_WINDOWS, run_quietly
@@ -255,16 +257,44 @@ def parse_netsh_wlan(output: str) -> dict:
     return out
 
 
-def _windows() -> DeviceLink:
-    ip = local_address()
-    if not ip:
-        return DeviceLink()
+#: PowerShell takes 1-5 s to start, so the adapter it describes is kept
+#: for this long (or until the local address changes); the Wi-Fi details
+#: come from netsh, which answers at once, on every read.
+ADAPTER_TTL_S = 60.0
+_adapter_cache: dict = {"ip": "", "at": 0.0, "adapter": {}}
+
+
+def _windows_adapter(ip: str) -> dict:
     script = (f"Get-NetIPAddress -IPAddress '{ip}' | Get-NetAdapter | "
               "Select-Object Name,InterfaceDescription,ReceiveLinkSpeed,PhysicalMediaType,MediaType,"
               "FullDuplex,Status | "
               "ConvertTo-Json -Compress")
-    adapter = parse_windows_adapter(run_quietly(
+    return parse_windows_adapter(run_quietly(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", script], 15))
+
+
+def _cached_adapter(ip: str, now: float | None = None) -> dict:
+    """The adapter for `ip`: PowerShell's last answer while it's fresh,
+    asked again otherwise. On a first ask, netsh runs meanwhile."""
+    now = time.monotonic() if now is None else now
+    cache = _adapter_cache
+    if cache["adapter"] and cache["ip"] == ip and now - cache["at"] < ADAPTER_TTL_S:
+        return cache["adapter"]
+    adapter = _windows_adapter(ip)
+    if adapter:
+        cache.update(ip=ip, at=now, adapter=adapter)
+    return adapter
+
+
+def _windows() -> DeviceLink:
+    ip = local_address()
+    if not ip:
+        return DeviceLink()
+    # netsh runs alongside PowerShell, so a first read waits for the slower one only.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        wlan = pool.submit(run_quietly, ["netsh", "wlan", "show", "interfaces"], 10)
+        adapter = _cached_adapter(ip)
+        netsh = wlan.result()
     media = f"{adapter.get('PhysicalMediaType', '')} {adapter.get('MediaType', '')}".lower()
     wifi = "802.11" in media or "wireless" in media
     fields: dict = {"link_mbps": windows_speed_mbps(adapter.get("ReceiveLinkSpeed"))}
@@ -274,8 +304,7 @@ def _windows() -> DeviceLink:
                       duplex="Full duplex" if duplex is True else "Half duplex" if duplex is False else "",
                       active=str(adapter.get("Status") or "").lower() == "up")
     if wifi:
-        fields.update({k: v for k, v in parse_netsh_wlan(
-            run_quietly(["netsh", "wlan", "show", "interfaces"], 10)).items() if v})
+        fields.update({k: v for k, v in parse_netsh_wlan(netsh).items() if v})
     return DeviceLink(interface=str(adapter.get("Name") or ""),
                       kind="Wi-Fi" if wifi else ("Ethernet" if adapter else ""),
                       local_ip=ip, **fields)
