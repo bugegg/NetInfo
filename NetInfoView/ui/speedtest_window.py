@@ -1189,8 +1189,11 @@ class SpeedTestWindow(QWidget):
         head.addWidget(device_head)
         head.addStretch(1)
         self.device_tag = _label("", "tag")
+        # Its own height only: a short window hides the heading, and the
+        # card's spare height mustn't swell the tag into a tall box.
+        self.device_tag.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.device_tag.hide()
-        head.addWidget(self.device_tag)
+        head.addWidget(self.device_tag, 0, Qt.AlignmentFlag.AlignVCenter)
         outer.addLayout(head)
         row = QHBoxLayout()
         row.setSpacing(12)
