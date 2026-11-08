@@ -63,6 +63,16 @@ def wifi_generation(phy: str, band: str = "") -> str:
     return f"Wi-Fi {number}"
 
 
+def rssi_text(link: DeviceLink) -> str:
+    """"-57 dBm"; from a Windows signal percentage only an estimate,
+    "≈ -57 dBm" (Windows maps -100..-50 dBm onto 0..100 %)."""
+    if link.signal_dbm is not None:
+        return f"{link.signal_dbm} dBm"
+    if link.signal_percent is not None:
+        return f"≈ {round(link.signal_percent / 2 - 100)} dBm"
+    return ""
+
+
 def strength(link: DeviceLink) -> tuple[str, int]:
     """("Strong"/"Good"/"Fair"/"Weak", bars out of 4) for a Wi-Fi signal."""
     if link.signal_dbm is not None:
@@ -245,6 +255,9 @@ def parse_netsh_wlan(output: str) -> dict:
     channel = labelled("channel")
     if channel:
         out["channel"] = channel
+    rssi = re.fullmatch(r"(-\d+)(?:\s*dBm)?", labelled("rssi"))  # Windows 11 lists it
+    if rssi:
+        out["signal_dbm"] = int(rssi.group(1))
     signal = labelled("signal") or next((v for _, v in pairs if re.fullmatch(r"\d+\s*%", v)), "")
     signal_match = re.match(r"(\d+)\s*%", signal)
     if signal_match:

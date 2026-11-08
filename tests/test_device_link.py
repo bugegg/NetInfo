@@ -137,3 +137,10 @@ def test_windows_adapter_is_cached_until_stale_or_the_address_changes(monkeypatc
     dl._cached_adapter("10.0.0.3", now=101.0)
     dl._cached_adapter("10.0.0.3", now=101.0 + dl.ADAPTER_TTL_S)
     assert calls == ["10.0.0.2", "10.0.0.3", "10.0.0.3"]
+
+
+def test_rssi():
+    assert dl.rssi_text(DeviceLink(signal_dbm=-57)) == "-57 dBm"
+    assert dl.rssi_text(DeviceLink(signal_percent=86)) == "≈ -57 dBm"
+    assert dl.rssi_text(DeviceLink()) == ""
+    assert dl.parse_netsh_wlan(NETSH + "    Rssi                   : -49\n")["signal_dbm"] == -49

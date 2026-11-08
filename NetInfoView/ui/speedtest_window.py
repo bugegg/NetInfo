@@ -39,7 +39,7 @@ from PyQt6.QtWidgets import (
 
 from . import glyphs
 from ..ping import device_link, logos, provider, speedtest
-from ..ping.device_link import strength, wifi_generation
+from ..ping.device_link import rssi_text, strength, wifi_generation
 from ..ping.speedtest import CLOUDFLARE, ServerSpec, SpeedResult, SpeedTestOptions
 from ..ping.speed_locations import locate
 from . import fonts
@@ -1061,6 +1061,12 @@ class SpeedTestWindow(QWidget):
                 color=GREEN if bars >= 3 else AMBER if bars == 2 else RED))
             self.signal_label.setText(label)
             self.signal_label.setToolTip(signal)
+            rssi = rssi_text(link)
+            self.rssi_label.setText(rssi)
+            self.rssi_label.setToolTip(
+                "RSSI: the received signal strength" if link.signal_dbm is not None
+                else f"RSSI estimated from Windows' signal quality ({link.signal_percent} %)")
+            self.rssi_label.setVisible(bool(rssi))
             self._band_rule.setVisible(bool(link.band))
             for w in (self.signal_icon, self.signal_label, self._signal_rule):
                 w.setVisible(bool(label))
@@ -1076,6 +1082,7 @@ class SpeedTestWindow(QWidget):
             up = link.active if link.active is not None else link.connected
             self.signal_icon.setPixmap(glyphs.pixmap("dot", GREEN if up else RED, 12))
             self.signal_label.setText("Link active" if up else "No link")
+            self.rssi_label.hide()
             self.signal_label.setToolTip("")
             for w in (self.signal_icon, self.signal_label, self._signal_rule):
                 w.setVisible(bool(link.kind))
@@ -1228,6 +1235,9 @@ class SpeedTestWindow(QWidget):
         net.addWidget(self._signal_rule)
         self.signal_icon = QLabel()
         self.signal_label = _label("", "networkName")
+        self.rssi_label = _label("", "networkName")  # "-57 dBm"
+        self.rssi_label.hide()
+        net.addWidget(self.rssi_label)
         net.addWidget(self.signal_icon)
         net.addWidget(self.signal_label)
         for w in (self._band_rule, self._signal_rule, self.signal_icon, self.signal_label):
