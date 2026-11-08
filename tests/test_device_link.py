@@ -114,8 +114,8 @@ NETSH_THAI = """
 
 def test_parse_netsh_wlan_in_another_language():
     assert dl.parse_netsh_wlan(NETSH_THAI) == {
-        "ssid": "Home Network", "band": "5 GHz", "phy": "802.11ax", "signal_percent": 86,
-        "link_mbps": 1201.0}
+        "ssid": "Home Network", "band": "5 GHz", "phy": "802.11ax", "channel": "36",
+        "signal_percent": 86, "link_mbps": 1201.0}
 
 
 def test_wifi_generation():
@@ -141,6 +141,20 @@ def test_windows_adapter_is_cached_until_stale_or_the_address_changes(monkeypatc
 
 def test_rssi():
     assert dl.rssi_text(DeviceLink(signal_dbm=-57)) == "-57 dBm"
-    assert dl.rssi_text(DeviceLink(signal_percent=86)) == "≈ -57 dBm"
+    assert dl.rssi_text(DeviceLink(signal_percent=86)) == "-57 dBm"
     assert dl.rssi_text(DeviceLink()) == ""
     assert dl.parse_netsh_wlan(NETSH + "    Rssi                   : -49\n")["signal_dbm"] == -49
+
+
+def test_netsh_name_in_utf8_beside_code_page_labels():
+    raw = ("    SSID                   : Wi \U0001F3E0 บ้าน\n").encode("utf-8") + \
+        "    สัญญาณ                 : 86%\n".encode("cp874")
+    text = dl.decode_netsh(raw)
+    assert dl.parse_netsh_wlan(text)["ssid"] == "Wi \U0001F3E0 บ้าน"
+
+
+def test_band_from_channel_when_netsh_names_none():
+    older = NETSH.replace("    Band                   : 5 GHz\n", "")
+    assert dl.parse_netsh_wlan(older)["band"] == "5 GHz"
+    assert dl.band_of_channel("6") == "2.4 GHz"
+    assert dl.band_of_channel("") == ""

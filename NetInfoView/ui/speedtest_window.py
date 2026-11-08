@@ -1047,10 +1047,11 @@ class SpeedTestWindow(QWidget):
         self.network_icon.setPixmap(glyphs.pixmap("wifi" if link.wifi else "cable", BLUE, 18))
         self.network_name.setToolTip("")
         if link.wifi:
-            self.network_name.setText(link.ssid or "Wi-Fi network")
-            self.network_name.setToolTip(
-                "" if link.ssid else "macOS shows the Wi-Fi network's name only to apps "
-                "allowed to use Location Services")
+            # "Wi-Fi network" on every system, as macOS shows it (it hides the
+            # name from apps without Location Services); the name, if known,
+            # is in the tooltip.
+            self.network_name.setText("Wi-Fi network")
+            self.network_name.setToolTip(link.ssid)
             self.band_tag.setText(link.band)
             self.band_tag.setVisible(bool(link.band))
             label, bars = strength(link)
@@ -1189,8 +1190,11 @@ class SpeedTestWindow(QWidget):
         head.addWidget(device_head)
         head.addStretch(1)
         self.device_tag = _label("", "tag")
+        # Its own height only: a short window hides the heading, and the
+        # card's spare height mustn't swell the tag into a tall box.
+        self.device_tag.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.device_tag.hide()
-        head.addWidget(self.device_tag)
+        head.addWidget(self.device_tag, 0, Qt.AlignmentFlag.AlignVCenter)
         outer.addLayout(head)
         row = QHBoxLayout()
         row.setSpacing(12)
@@ -1649,11 +1653,8 @@ class SpeedTestWindow(QWidget):
         for card in (self.card_down, self.card_up, self.card_ping, self.card_jitter):
             card.note.setVisible(roomy)
         self.provider_badge.set_size(46 if roomy else 34)
-        # A short window keeps only the cards' main row.
-        self._device_rule.setVisible(roomy)
-        self._network_row.setVisible(roomy)
-        for head in self._section_heads:
-            head.setVisible(roomy)
+        # The cards keep their headings and the network row at every size,
+        # so a short window (Windows at 125-150 % scaling) looks like a tall one.
         scale = self.scale_for(w, h)
         if scale == self._scale:
             return
