@@ -56,6 +56,8 @@ class NetPathThread(QThread):
     `live` is set, and looks up each new hop's name and country."""
 
     sweep_ready = pyqtSignal(object)
+    #: Sweep: the trace so far, after each hop that answered.
+    partial_ready = pyqtSignal(object)
     #: The TTL being probed, for the status line.
     progress = pyqtSignal(int)
     name_ready = pyqtSignal(str, str)
@@ -102,7 +104,8 @@ class NetPathThread(QThread):
                     probe = prober = TcpProber(self._port)
                 try:
                     result = netpath.sweep(self._ip, probe, stopped=lambda: self._stop,
-                                           on_ttl=self.progress.emit)
+                                           on_ttl=self.progress.emit,
+                                           on_partial=self.partial_ready.emit)
                 except TcpUnavailable as error:
                     self.failed.emit(str(error))
                     break
@@ -579,6 +582,7 @@ class NetPathWindow(QWidget):
         thread.resolved.connect(self._on_resolved)
         thread.unresolved.connect(self._on_unresolved)
         thread.sweep_ready.connect(self.add_sweep)
+        thread.partial_ready.connect(self.show_partial)
         thread.failed.connect(self._on_failed)
         thread.progress.connect(lambda ttl: self.status.setText(f"Tracing {self._ip}: hop {ttl}…"))
         thread.name_ready.connect(self._on_name)
@@ -712,6 +716,25 @@ class NetPathWindow(QWidget):
             self.show_sweep(len(self.sweeps) - 1)
         else:
             self.history.update()
+
+    def show_partial(self, result: Sweep) -> None:
+        """Draw the first trace hop by hop while it runs. Once a trace has
+        finished, later ones replace it only when done, so a live view
+        doesn't redraw half a path every LIVE_INTERVAL."""
+        if self.sweeps:
+            return
+        graph = netpath.build_graph([result], self._ip)
+        self.raw_graph = graph
+        orgs = {**self.orgs, **netpath.private_hop_orgs(graph, self.orgs, self._source[1])}
+        self.group_of = (netpath.provider_groups(graph, orgs)
+                         if self.group_box.isChecked() else {})
+        folded = {key: group for key, group in self.group_of.items()
+                  if group not in self.expanded}
+        collapsed = netpath.collapse(graph, folded)
+        self.render(collapsed, collapsed)
+        # Keep the growing path in view, and fit the finished one again.
+        self.view.fit()
+        self._fitted = False
 
     def _summary(self, result: Sweep) -> str:
         stamp = datetime.fromtimestamp(result.started).strftime("%H:%M:%S")

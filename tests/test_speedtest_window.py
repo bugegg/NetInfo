@@ -26,7 +26,7 @@ PROVIDER = Provider("AIS", "ADVANCED WIRELESS NETWORK COMPANY LIMITED", "203.0.1
 @pytest.fixture(autouse=True)
 def offline_server_list(monkeypatch):
     monkeypatch.setattr(speedtest, "fetch_servers", lambda: [s for s, _ in OFFLINE])
-    monkeypatch.setattr(speedtest, "rank_servers", lambda servers: OFFLINE)
+    monkeypatch.setattr(speedtest, "rank_servers", lambda servers, on_progress=None: OFFLINE)
     monkeypatch.setattr(speedtest, "connect_time_ms", lambda spec: 12.0)
     monkeypatch.setattr(provider, "fetch_provider", lambda: (True, PROVIDER))
     monkeypatch.setattr(device_link, "device_link", lambda: LINK)
@@ -153,7 +153,7 @@ def test_picker_lists_servers_with_country_city_and_latency(qapp):
 def test_thailand_chip_filters_to_thai_servers(qapp, monkeypatch):
     thai = speedtest.FALLBACK_OOKLA[0]
     ranked = [(thai, 9.0)] + OFFLINE
-    monkeypatch.setattr(speedtest, "rank_servers", lambda servers: ranked)
+    monkeypatch.setattr(speedtest, "rank_servers", lambda servers, on_progress=None: ranked)
     w = SpeedTestWindow()
     _wait(lambda: w._list_thread is None)
     w.open_picker()
@@ -370,3 +370,4 @@ def test_ipv4_only_connection(qapp, monkeypatch):
     assert w.public_ip.text() == "203.0.113.9"
     assert w.public_ipv6.text() == "–" and not w.copy_public6.isEnabled()
     w.close()
+

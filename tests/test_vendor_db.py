@@ -109,3 +109,53 @@ def test_migrate_legacy_db_without_an_old_file_does_nothing(tmp_path):
     dest = tmp_path / "new" / "vendor.sqlite"
     assert not migrate_legacy_db(dest, tmp_path / "missing.sqlite")
     assert not dest.exists()
+
+
+def _bundled(tmp_path, rows):
+    from NetInfoView.fileio.vendor_db import VendorDB
+
+    path = tmp_path / "bundled.sqlite"
+    db = VendorDB(path)
+    db.replace_all(rows, updated_at="2026-11-09 00:00:00")
+    db.close()
+    return path
+
+
+def test_seed_from_fills_an_empty_database(tmp_path):
+    from NetInfoView.fileio.vendor_db import VendorDB
+
+    bundled = _bundled(tmp_path, [("E8136E", "Example Co"), ("CCF411", "Other Co")])
+    db = VendorDB(tmp_path / "local.sqlite")
+    try:
+        assert db.seed_from(bundled) == 2
+        assert db.lookup("E8:13:6E:00:00:01") == "Example Co"
+        assert db.last_updated() == "2026-11-09 00:00:00"
+    finally:
+        db.close()
+
+
+def test_seed_from_leaves_an_existing_database_alone(tmp_path):
+    from NetInfoView.fileio.vendor_db import VendorDB
+
+    bundled = _bundled(tmp_path, [("E8136E", "Old Name")])
+    db = VendorDB(tmp_path / "local.sqlite")
+    try:
+        db.replace_all([("E8136E", "Newer Name")], updated_at="later")
+        assert db.seed_from(bundled) == 0
+        assert db.lookup("E8136E") == "Newer Name"
+        assert db.last_updated() == "later"
+    finally:
+        db.close()
+
+
+def test_seed_from_without_a_bundled_copy_does_nothing(tmp_path):
+    from NetInfoView.fileio.vendor_db import VendorDB
+
+    db = VendorDB(tmp_path / "local.sqlite")
+    try:
+        assert db.seed_from(tmp_path / "missing.sqlite") == 0
+        (tmp_path / "junk.sqlite").write_bytes(b"not a database")
+        assert db.seed_from(tmp_path / "junk.sqlite") == 0
+        assert db.entry_count() == 0
+    finally:
+        db.close()

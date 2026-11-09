@@ -9,3 +9,4 @@ dist/
 
 # Dev launcher: holds this machine's absolute path.
 NetInfoView.app/Contents/MacOS/
+NetInfoView.app/Contents/_CodeSignature/

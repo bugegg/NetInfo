@@ -140,6 +140,12 @@ class PingEngine:
                     pass
         finally:
             flusher.cancel()
+            if self._stop_event.is_set():
+                # Stopped by hand: drop the pings still out rather than wait
+                # up to the timeout for each (seconds, with hosts offline).
+                # They report nothing, so no false "timed out" is recorded.
+                for task in list(self._tasks):
+                    task.cancel()
             await self._drain()
             self._flush()
             self._pinger.close()

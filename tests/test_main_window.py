@@ -41,6 +41,8 @@ def window(qapp, tmp_path, monkeypatch):
     # Likewise DNS names: no real queries to whatever DNS this machine uses.
     monkeypatch.setattr("NetInfoView.ping.dns_ptr.system_nameservers", lambda: [])
     monkeypatch.setattr("NetInfoView.ping.dns_ptr.lookup", lambda ip, servers=None: "")
+    monkeypatch.setattr("NetInfoView.ping.netbios.lookup_mac", lambda ip: "")
+    monkeypatch.setattr("NetInfoView.ping.arp_scan.scan", lambda ips: {})
     # And no SNMP walks of the guessed gateways of the test networks.
     monkeypatch.setattr(
         "NetInfoView.ping.device_info.snmp_arp.lookup_many",
@@ -743,3 +745,23 @@ def test_add_hosts_can_still_add_to_the_list(window, monkeypatch):
     assert [e.host for e in window._model.entries()] == ["10.0.0.1", "172.16.10.22"]
     assert window.settings.add_hosts_replace is False  # remembered for next time
 
+
+
+def test_restarting_pings_gives_unresolved_hosts_their_lookups_again(window, monkeypatch):
+    """After Stop, Start looks hosts up again as the first Start did: a host
+    that ran out of tries gets a fresh set, and its next answer triggers a
+    sweep straight away."""
+    from NetInfoView.ui import main_window
+
+    entries = _entries_with_statuses(window, "192.168.1.1 Router\n")
+    key = entries[0].key
+    window._device_info_attempts[key] = main_window.DEVICE_INFO_MAX_ATTEMPTS
+    window._answered_keys.add(key)
+
+    window.start_pinging()
+    try:
+        assert window._device_info_attempts == {}
+        assert window._answered_keys == set()
+    finally:
+        window.stop_pinging()
+        window._engine.wait(2000)

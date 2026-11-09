@@ -181,6 +181,8 @@ class SpeedTestThread(QThread):
 class ServerListThread(QThread):
     """Every server, each with how near it is, and Cloudflare's nearness."""
     loaded = pyqtSignal(object)  # list[(ServerSpec, ms | None)]
+    #: The servers reached so far, ranked, while the rest are still timed.
+    partial = pyqtSignal(object)
     cloudflare = pyqtSignal(object)  # ms | None
 
     def stop(self) -> None:
@@ -189,9 +191,17 @@ class ServerListThread(QThread):
     def run(self) -> None:
         try:
             self.cloudflare.emit(speedtest.connect_time_ms(speedtest.CLOUDFLARE))
-            self.loaded.emit(speedtest.rank_servers(speedtest.fetch_servers()))
+            self.loaded.emit(speedtest.rank_servers(speedtest.fetch_servers(),
+                                                    on_progress=self.partial.emit))
         except RuntimeError:  # the app quit while it ran: nobody to tell
             pass
+        except Exception:
+            # An exception escaping QThread.run() aborts the whole app (PyQt6);
+            # an empty list just shows "Couldn't load the server list".
+            try:
+                self.loaded.emit([])
+            except RuntimeError:
+                pass
 
 
 class DeviceThread(QThread):
@@ -1254,11 +1264,17 @@ class SpeedTestWindow(QWidget):
         self._list_thread = track(ServerListThread())
         self._list_thread.cloudflare.connect(self._set_cloudflare_ms)
         self._list_thread.loaded.connect(self._servers_loaded)
+        self._list_thread.partial.connect(self._servers_partial)
         self._list_thread.start()
 
     @from_thread
     def _set_cloudflare_ms(self, ms) -> None:
         self.picker.set_cloudflare_latency(ms)
+
+    @from_thread
+    def _servers_partial(self, ranked) -> None:
+        if not self._gone():
+            self.picker.set_servers(ranked)
 
     @from_thread
     def _servers_loaded(self, ranked) -> None:

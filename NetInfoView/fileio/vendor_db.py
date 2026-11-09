@@ -1,9 +1,11 @@
 """Local, persistent MAC-vendor (IEEE OUI) lookup.
 
-Deliberately starts empty: there is no bundled seed list, so a lookup returns
-"" until the user explicitly runs Options > Update MAC Vendor Database. That
-keeps the data's freshness honest, and the whole point of persisting it in
-SQLite under Application Support is that this fetch only has to happen once.
+A release build bundles a copy of the IEEE registry taken on the day it was
+built (packaging/make_vendor_db.py), and an empty local database is seeded
+from it at launch (VendorDB.seed_from), so vendor names show up on a fresh
+install without going online. Options > Update MAC Vendor Database fetches
+the current registry, and is the only way to get one when there's no bundled
+copy (running from source, or the build couldn't reach IEEE).
 """
 
 from __future__ import annotations
@@ -73,6 +75,11 @@ def migrate_legacy_db(dest: Path | None = None, legacy: Path | None = None) -> b
     return True
 
 
+def bundled_db_path() -> Path:
+    """Where the build scripts put the ready-made database inside the app."""
+    return Path(__file__).resolve().parent.parent / "data" / "vendor.sqlite"
+
+
 def normalise_prefix(mac: str) -> str:
     """The first 3 octets of a MAC as 6 uppercase hex digits, no separators.
 
@@ -131,6 +138,34 @@ class VendorDB:
         return row[0] if row else None
 
     # -- writes ----------------------------------------------------------
+
+    def seed_from(self, bundled: Path | None = None) -> int:
+        """Fill an empty table from the database bundled with the app.
+
+        Returns the number of entries copied: 0 if this one already has
+        entries or there's no usable bundled copy. Never raises; worst case
+        the registry is downloaded instead.
+        """
+        bundled = bundled or bundled_db_path()
+        if not bundled.is_file() or self.entry_count():
+            return 0
+        try:
+            with self._lock:
+                self._conn.execute("ATTACH DATABASE ? AS bundled", (str(bundled),))
+                try:
+                    with self._conn:
+                        self._conn.execute(
+                            "INSERT OR REPLACE INTO oui SELECT prefix, vendor FROM bundled.oui"
+                        )
+                        self._conn.execute(
+                            "INSERT OR REPLACE INTO meta SELECT key, value FROM bundled.meta"
+                            " WHERE key = 'last_updated'"
+                        )
+                finally:
+                    self._conn.execute("DETACH DATABASE bundled")
+        except sqlite3.Error:
+            return 0
+        return self.entry_count()
 
     def replace_all(self, rows: Iterable[tuple[str, str]], updated_at: str) -> int:
         """Swap in a fresh OUI table in one transaction. Returns the row count.

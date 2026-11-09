@@ -112,6 +112,8 @@ def test_lookup_many_asks_later_routers_only_for_what_is_missing(monkeypatch):
 def test_sweep_fills_macs_the_local_arp_table_lacks(monkeypatch):
     monkeypatch.setattr(device_info.dns_ptr, "system_nameservers", lambda: [])
     monkeypatch.setattr(device_info.arp, "lookup", lambda ip: "11:11:11:11:11:11" if ip == "192.168.1.5" else "")
+    monkeypatch.setattr(device_info.arp_scan, "scan", lambda ips: {})
+    monkeypatch.setattr(device_info.netbios, "lookup_mac", lambda ip: "")
     calls = []
 
     def fake_lookup_many(ips, routers, community):

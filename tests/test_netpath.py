@@ -488,3 +488,29 @@ def test_a_target_that_cannot_be_found_says_so(qapp, monkeypatch):
     assert window.status.text().startswith("Can't trace nowhere.invalid")
     assert window.health.text() == "Stopped" and window.sweeps == []
     window.close()
+
+
+def test_sweep_reports_the_trace_so_far_after_each_hop():
+    partials = []
+    netpath.sweep("8.8.8.8", fake_probe([]), flows=2, on_partial=partials.append)
+    assert [len(p.routes[0]) for p in partials] == [1, 2, 3, 4]
+    assert partials[0].routes[0][0].address == "10.0.0.1"
+    assert partials[-1].reached_flows() == 2
+
+
+def test_the_first_trace_is_drawn_hop_by_hop(qapp, monkeypatch):
+    from NetInfoView.ui import netpath_window as nw
+    monkeypatch.setattr(nw.NetPathWindow, "start", lambda self: None)
+    window = nw.NetPathWindow("dns.google", "8.8.8.8")
+    partials = []
+    full = netpath.sweep("8.8.8.8", fake_probe([]), flows=2, on_partial=partials.append)
+
+    window.show_partial(partials[1])  # two hops in: the host not reached yet
+    assert "10.0.0.1" in window.items and DESTINATION in window.items
+    assert window.graph.reached == 0
+
+    window.add_sweep(full)
+    assert window.graph.reached == 2
+    window.show_partial(partials[0])  # a later trace's partial: ignored
+    assert window.graph.reached == 2
+    window.close()

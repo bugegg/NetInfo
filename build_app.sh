@@ -13,6 +13,15 @@ VERSION=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' NetInfoView/__init__.py)
 [ -n "$VERSION" ] || { echo "No __version__ in NetInfoView/__init__.py" >&2; exit 1; }
 
 rm -rf build dist
+
+# A ready-made MAC vendor database, so a fresh install has vendor names
+# without going online. Optional: without it, Options > Update
+# MAC Vendor Database still fetches one.
+VENDOR_DATA=()
+if .venv/bin/python packaging/make_vendor_db.py build/vendor/vendor.sqlite; then
+    VENDOR_DATA=(--add-data build/vendor:NetInfoView/data)
+fi
+
 .venv/bin/pyinstaller \
     --noconfirm \
     --windowed \
@@ -24,6 +33,7 @@ rm -rf build dist
     --exclude-module pytest \
     --add-data NetInfoView/fonts:NetInfoView/fonts \
     --add-data NetInfoView/flags:NetInfoView/flags \
+    ${VENDOR_DATA[@]+"${VENDOR_DATA[@]}"} \
     packaging/launch.py
 
 PLIST=dist/NetInfoView.app/Contents/Info.plist

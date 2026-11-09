@@ -30,7 +30,7 @@ import time
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from ..https import ssl_context, urlopen
@@ -422,7 +422,8 @@ def fetch_servers(timeout: float = 8.0) -> list[ServerSpec]:
 
 def connect_time_ms(spec: ServerSpec, timeout: float = 2.0, tries: int = 2) -> float | None:
     """How near a server is: the quickest TCP connect to it, in ms (None if
-    it can't be reached)."""
+    it can't be reached). A server that fails once isn't asked again, so an
+    unreachable one costs one timeout, not `tries` of them."""
     url = urllib.parse.urlsplit(spec.url)
     if not url.hostname:
         return None
@@ -433,19 +434,48 @@ def connect_time_ms(spec: ServerSpec, timeout: float = 2.0, tries: int = 2) -> f
         try:
             socket.create_connection((url.hostname, port), timeout=timeout).close()
         except OSError:
-            continue
+            break
         ms = (time.perf_counter() - start) * 1000
         best = ms if best is None else min(best, ms)
     return best
 
 
-def rank_servers(servers: list[ServerSpec]) -> list[tuple[ServerSpec, float | None]]:
-    """Every server with its connect time, nearest first, unreachable last."""
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        times = list(pool.map(connect_time_ms, servers))
-    ranked = list(zip(servers, times))
+#: Servers timed at once: enough that a list of ~120 takes about as long as
+#: its farthest server, not a dozen of them back to back.
+RANK_WORKERS = 64
+#: How often the servers timed so far are handed over while ranking.
+RANK_PROGRESS_S = 0.25
+
+
+def _ranked(servers: list[ServerSpec], times: dict[str, float | None]) -> list[tuple[ServerSpec, float | None]]:
+    ranked = [(spec, times.get(spec.url)) for spec in servers]
     ranked.sort(key=lambda st: (st[1] is None, st[1] or 0, st[0].name))
     return ranked
+
+
+def rank_servers(
+    servers: list[ServerSpec],
+    on_progress: Callable[[list[tuple[ServerSpec, float | None]]], None] | None = None,
+) -> list[tuple[ServerSpec, float | None]]:
+    """Every server with its connect time, nearest first, unreachable last.
+    ``on_progress``, if given, gets the servers reached so far (ranked) as
+    they come in, so a list can be shown before the slowest is timed."""
+    if not servers:
+        return []
+    times: dict[str, float | None] = {}
+    last = time.monotonic()
+    with ThreadPoolExecutor(max_workers=min(RANK_WORKERS, len(servers))) as pool:
+        futures = {pool.submit(connect_time_ms, spec): spec for spec in servers}
+        for future in as_completed(futures):
+            try:
+                times[futures[future].url] = future.result()
+            except Exception:
+                times[futures[future].url] = None
+            if on_progress is not None and time.monotonic() - last >= RANK_PROGRESS_S:
+                last = time.monotonic()
+                reached = [spec for spec in servers if times.get(spec.url) is not None]
+                on_progress(_ranked(reached, times))
+    return _ranked(servers, times)
 
 
 # --------------------------------------------------------------- transfers

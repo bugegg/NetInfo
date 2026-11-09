@@ -19,14 +19,17 @@ from __future__ import annotations
 import copy
 import ipaddress
 import socket
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from ..fileio.vendor_db import PRIVATE_MAC_LABEL
 from . import arp
+from . import arp_scan
 from . import dns_ptr
 from . import hostname as hostname_lookup
+from . import netbios
 from . import port_scan
 from . import snmp_arp
 
@@ -34,6 +37,9 @@ from . import snmp_arp
 #: name, are I/O-bound (waiting on a socket or a subprocess), so a thread
 #: pool larger than the CPU count is still a net win.
 MAX_HOSTNAME_WORKERS = 24
+#: While answers trickle in, they're reported at most this often, so each
+#: shows up in the table as soon as it's found without flooding the GUI.
+PROGRESS_INTERVAL_SECONDS = 0.25
 
 
 @dataclass(slots=True)
@@ -162,6 +168,59 @@ def resolve_batch(
         if job.needs_all_ips:
             all_ips_jobs[job.key] = job.host
 
+    def fill_vendors() -> None:
+        for result in results.values():
+            if not result.mac or result.vendor:
+                continue
+            # A locally-administered MAC (e.g. a phone's "Private Wi-Fi
+            # address") was never assigned to any vendor, so skip the
+            # database rather than report it as simply unknown.
+            if arp.is_locally_administered(result.mac):
+                result.vendor = PRIVATE_MAC_LABEL
+            else:
+                result.vendor = vendor_db.lookup(result.mac) or ""
+
+    last_report = 0.0
+
+    def stage_done() -> None:
+        nonlocal last_report
+        fill_vendors()
+        if report is not None:
+            report([copy.copy(result) for result in results.values()])
+        last_report = time.monotonic()
+
+    def progress() -> None:
+        """Report what's been found so far, if nothing was just reported."""
+        if report is not None and time.monotonic() - last_report >= PROGRESS_INTERVAL_SECONDS:
+            stage_done()
+
+    # Names are the slowest part (each source waits out a timeout for a
+    # host that doesn't answer it), so they start now and run alongside
+    # the MAC lookups below. Both share one pool: (key, which field).
+    name_jobs = [(key, ip, "hostname", hostname_lookup.resolve)
+                 for key, ip in hostname_jobs.items()]
+    if dns_name_jobs:
+        servers = dns_ptr.system_nameservers()  # once for the whole batch
+        name_jobs += [(key, ip, "dns_name", lambda ip: dns_ptr.lookup(ip, servers))
+                      for key, ip in dns_name_jobs.items()]
+    name_pool = None
+    future_to_job = {}
+    if name_jobs:
+        name_pool = ThreadPoolExecutor(max_workers=min(MAX_HOSTNAME_WORKERS, len(name_jobs)))
+        future_to_job = {
+            name_pool.submit(lookup, ip): (key, field_name)
+            for key, ip, field_name, lookup in name_jobs
+        }
+
+    # No ARP entry (on macOS 27, none at all: the app is handed an empty
+    # table): ask the hosts on our own subnets for their MACs directly.
+    missing = {job.key: job.ip for job in jobs if job.ip and not results[job.key].mac}
+    if missing:
+        found = arp_scan.scan(list(missing.values()))
+        for key, ip in missing.items():
+            results[key].mac = found.get(ip, "")
+    stage_done()  # MAC and vendor from the ARP table and the ARP scan
+
     if snmp_routers or snmp_auto:
         missing = {job.key: job.ip for job in jobs if job.ip and not results[job.key].mac}
         if missing:
@@ -172,38 +231,25 @@ def resolve_batch(
             found = snmp_arp.lookup_many(list(missing.values()), routers, snmp_community)
             for key, ip in missing.items():
                 results[key].mac = found.get(ip, "")
+            stage_done()
 
-    for result in results.values():
-        if not result.mac:
-            continue
-        # A locally-administered MAC (e.g. a phone's "Private Wi-Fi address")
-        # was never assigned to any vendor, so skip the database entirely
-        # rather than report it as simply unknown.
-        if arp.is_locally_administered(result.mac):
-            result.vendor = PRIVATE_MAC_LABEL
-        else:
-            result.vendor = vendor_db.lookup(result.mac) or ""
+    # Still none (no ARP entry, or the OS hiding the table): a Windows PC or
+    # server says its own MAC in reply to a NetBIOS node-status query.
+    missing = {job.key: job.ip for job in jobs if job.ip and not results[job.key].mac}
+    if missing:
+        with ThreadPoolExecutor(max_workers=min(MAX_HOSTNAME_WORKERS, len(missing))) as pool:
+            future_to_key = {pool.submit(netbios.lookup_mac, ip): key
+                             for key, ip in missing.items()}
+            for future in as_completed(future_to_key):
+                try:
+                    results[future_to_key[future]].mac = future.result() or ""
+                except Exception:
+                    continue
+                progress()
+        stage_done()  # every MAC this sweep will find
 
-    def stage_done() -> None:
-        if report is not None:
-            report([copy.copy(result) for result in results.values()])
-
-    stage_done()  # MAC and vendor: everything so far came from local tables
-
-    # Both name lookups share one pool: (key, which field) -> future.
-    name_jobs = [(key, ip, "hostname", hostname_lookup.resolve)
-                 for key, ip in hostname_jobs.items()]
-    if dns_name_jobs:
-        servers = dns_ptr.system_nameservers()  # once for the whole batch
-        name_jobs += [(key, ip, "dns_name", lambda ip: dns_ptr.lookup(ip, servers))
-                      for key, ip in dns_name_jobs.items()]
-    if name_jobs:
-        worker_count = min(MAX_HOSTNAME_WORKERS, len(name_jobs))
-        with ThreadPoolExecutor(max_workers=worker_count) as pool:
-            future_to_job = {
-                pool.submit(lookup, ip): (key, field_name)
-                for key, ip, field_name, lookup in name_jobs
-            }
+    if name_pool is not None:
+        with name_pool:
             for future in as_completed(future_to_job):
                 key, field_name = future_to_job[future]
                 try:
@@ -211,8 +257,8 @@ def resolve_batch(
                 except Exception:
                     name = ""
                 setattr(results[key], field_name, name)
-
-    if name_jobs:
+                if name:
+                    progress()
         stage_done()
 
     if port_jobs:
