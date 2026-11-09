@@ -124,6 +124,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -l dist
+          # The app isn't signed by Apple or Microsoft, so first-time installs
+          # get a warning; explain how to get past it. gh puts these notes
+          # above the generated changelog.
+          cat > notes.md <<'EOF'
+          ## First install
+
+          NetInfoView isn't signed with a paid Apple/Microsoft certificate, so your system warns before the first launch. The app is safe to open.
+
+          **macOS:** unzip, move `NetInfoView.app` to Applications, then right-click it → **Open** → **Open**. If macOS says the app "is damaged", run this in Terminal:
+
+          ```
+          xattr -dr com.apple.quarantine /Applications/NetInfoView.app
+          ```
+
+          **Windows:** if the browser blocks the download, choose **Keep** → **Keep anyway**. When "Windows protected your PC" appears, click **More info** → **Run anyway**.
+
+          Copies that are already installed update themselves without these steps.
+          EOF
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "NetInfoView ${GITHUB_REF_NAME#v}" --generate-notes
+            --title "NetInfoView ${GITHUB_REF_NAME#v}" \
+            --notes-file notes.md --generate-notes
