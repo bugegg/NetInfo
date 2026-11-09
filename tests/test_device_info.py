@@ -10,6 +10,9 @@ def no_real_dns(monkeypatch):
     about DNS names stub dns_ptr.lookup themselves."""
     monkeypatch.setattr(device_info.dns_ptr, "system_nameservers", lambda: [])
     monkeypatch.setattr(device_info.dns_ptr, "lookup", lambda ip, servers=None: "")
+    # Nor NetBIOS queries for a MAC; the tests of that fallback stub it.
+    monkeypatch.setattr(device_info.netbios, "lookup_mac", lambda ip: "")
+    monkeypatch.setattr(device_info.arp_scan, "scan", lambda ips: {})
 
 
 class FakeVendorDB:
@@ -400,21 +403,101 @@ def test_dns_name_comes_from_the_system_dns_servers(monkeypatch):
 
 def test_mac_and_vendor_are_reported_before_the_slow_name_lookups(monkeypatch):
     """The ARP table and vendor database answer in milliseconds; the sweep
-    hands those over before waiting on the networked name lookups."""
+    hands those over without waiting on the networked name lookups, which
+    run alongside."""
+    import threading
+
     reports = []
+    mac_reported = threading.Event()
     monkeypatch.setattr(device_info.arp, "lookup", lambda ip: "00:11:22:33:44:55")
 
     def resolve(ip):
-        # By the time names are asked for, MAC and vendor are already out.
-        assert reports and reports[0][0].vendor == "Acme"
+        # A slow name: MAC and vendor must get out while this still waits.
+        assert mac_reported.wait(2)
         return "switch-01"
+
+    def on_report(batch):
+        reports.append(batch)
+        mac_reported.set()
 
     monkeypatch.setattr(device_info.hostname_lookup, "resolve", resolve)
     results = device_info.resolve_batch(
         [DeviceInfoJob(key=1, ip="192.168.1.5", needs_hostname=True)],
-        FakeVendorDB({"00:11:22:33:44:55": "Acme"}), report=reports.append,
+        FakeVendorDB({"00:11:22:33:44:55": "Acme"}), report=on_report,
     )
-    assert [r[0].hostname for r in reports] == ["", "switch-01"]
-    assert reports[0][0].mac == "00:11:22:33:44:55"
+    first, last = reports[0][0], reports[-1][0]
+    assert (first.mac, first.vendor, first.hostname) == ("00:11:22:33:44:55", "Acme", "")
+    assert last.hostname == "switch-01"
     assert results[0].hostname == "switch-01"
-    assert reports[0][0] is not results[0]  # copies: the sweep keeps writing its own
+    assert first is not results[0]  # copies: the sweep keeps writing its own
+
+
+def test_names_are_reported_as_each_one_arrives(monkeypatch):
+    """A host whose name comes back quickly shows up without waiting for a
+    slow one in the same sweep."""
+    import threading
+
+    monkeypatch.setattr(device_info, "PROGRESS_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(device_info.arp, "lookup", lambda ip: "")
+    fast_reported = threading.Event()
+    reports = []
+
+    def resolve(ip):
+        if ip == "192.168.1.9":
+            assert fast_reported.wait(2), "the quick name was held back"
+            return "slow-host"
+        return "quick-host"
+
+    def on_report(batch):
+        reports.append(batch)
+        if any(result.hostname == "quick-host" for result in batch):
+            fast_reported.set()
+
+    monkeypatch.setattr(device_info.hostname_lookup, "resolve", resolve)
+    device_info.resolve_batch(
+        [DeviceInfoJob(key=1, ip="192.168.1.5", needs_hostname=True),
+         DeviceInfoJob(key=2, ip="192.168.1.9", needs_hostname=True)],
+        FakeVendorDB(), report=on_report,
+    )
+    assert {result.hostname for result in reports[-1]} == {"quick-host", "slow-host"}
+
+
+def test_netbios_supplies_the_mac_when_arp_has_none(monkeypatch):
+    monkeypatch.setattr(device_info.arp, "lookup", lambda ip: "")
+    monkeypatch.setattr(device_info.hostname_lookup, "resolve", lambda ip: "")
+    monkeypatch.setattr(device_info.netbios, "lookup_mac",
+                        lambda ip: "00:0C:29:00:34:E1" if ip == "192.168.1.1" else "")
+
+    db = FakeVendorDB({"00:0C:29:00:34:E1": "VMware, Inc."})
+    results = device_info.resolve_batch(
+        [DeviceInfoJob(key=1, ip="192.168.1.1"), DeviceInfoJob(key=2, ip="192.168.1.2")], db
+    )
+    by_key = {result.key: result for result in results}
+    assert (by_key[1].mac, by_key[1].vendor) == ("00:0C:29:00:34:E1", "VMware, Inc.")
+    assert by_key[2].mac == ""
+
+
+def test_netbios_not_asked_when_arp_has_the_mac(monkeypatch):
+    def fail(ip):
+        raise AssertionError("no NetBIOS query needed")
+    monkeypatch.setattr(device_info.arp, "lookup", lambda ip: "11:22:33:44:55:66")
+    monkeypatch.setattr(device_info.hostname_lookup, "resolve", lambda ip: "")
+    monkeypatch.setattr(device_info.netbios, "lookup_mac", fail)
+    device_info.resolve_batch([DeviceInfoJob(key=1, ip="192.168.1.1")], FakeVendorDB())
+
+
+def test_arp_scan_supplies_macs_before_netbios_is_asked(monkeypatch):
+    asked = []
+    monkeypatch.setattr(device_info.arp, "lookup", lambda ip: "")
+    monkeypatch.setattr(device_info.hostname_lookup, "resolve", lambda ip: "")
+    monkeypatch.setattr(device_info.arp_scan, "scan",
+                        lambda ips: {"192.168.1.1": "B2:90:FA:72:23:93"})
+    monkeypatch.setattr(device_info.netbios, "lookup_mac", lambda ip: asked.append(ip) or "")
+
+    results = device_info.resolve_batch(
+        [DeviceInfoJob(key=1, ip="192.168.1.1"), DeviceInfoJob(key=2, ip="192.168.1.2")],
+        FakeVendorDB(),
+    )
+    by_key = {result.key: result for result in results}
+    assert by_key[1].mac == "B2:90:FA:72:23:93"
+    assert asked == ["192.168.1.2"]  # only the host the scan didn't find

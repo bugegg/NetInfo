@@ -96,6 +96,7 @@ class MainWindow(QMainWindow):
         self._dont_fragment_supported = self._probe_dont_fragment_support()
         self._current_file = ""
         self._vendor_db = VendorDB()
+        self._vendor_db.seed_from()
         self._vendor_update_thread: VendorUpdateThread | None = None
         self._update_check_thread: UpdateCheckThread | None = None
         self._update_download_thread: UpdateDownloadThread | None = None
@@ -973,6 +974,12 @@ class MainWindow(QMainWindow):
             return
         if not self._model.entries() and not self._offer_network_scan():
             return
+        # Each Start looks hosts up afresh, as the first one did: hosts still
+        # missing a MAC, name, vendor or port scan get their full set of
+        # tries again, and a sweep follows straight after each first answer.
+        # Hosts already fully resolved are still left alone.
+        self._device_info_attempts.clear()
+        self._answered_keys.clear()
         targets = [entry.to_target() for entry in self._model.entries()]
         self._engine = EngineThread(targets, self._engine_options())
         self._engine.results_ready.connect(self._on_results)

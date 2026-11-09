@@ -26,6 +26,14 @@ $plinkHash = (Get-FileHash build\putty\plink.exe -Algorithm SHA256).Hash
 if ($plinkHash -ne $plinkSha256) { throw "plink.exe checksum mismatch: $plinkHash" }
 Copy-Item packaging\windows\PuTTY-LICENCE.txt build\putty\
 
+# A ready-made MAC vendor database, so a fresh install has vendor names
+# without going online. Optional: without it, Options > Update
+# MAC Vendor Database still fetches one.
+$vendorData = @()
+.venv\Scripts\python packaging\make_vendor_db.py build\vendor\vendor.sqlite
+if ($LASTEXITCODE -eq 0) { $vendorData = @("--add-data", "build\vendor;NetInfoView\data") }
+$global:LASTEXITCODE = 0
+
 # Pillow lets PyInstaller turn the macOS .icns into the .exe's icon.
 .venv\Scripts\pyinstaller `
     --noconfirm `
@@ -38,6 +46,7 @@ Copy-Item packaging\windows\PuTTY-LICENCE.txt build\putty\
     --add-data "NetInfoView\fonts;NetInfoView\fonts" `
     --add-data "NetInfoView\flags;NetInfoView\flags" `
     --add-data "build\putty;NetInfoView\putty" `
+    @vendorData `
     packaging\launch.py
 if ($LASTEXITCODE) { throw "PyInstaller failed" }
 Remove-Item -Force NetInfoView.spec -ErrorAction SilentlyContinue

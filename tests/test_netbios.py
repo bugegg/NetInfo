@@ -58,3 +58,29 @@ def test_lookup_against_a_local_fake_responder(monkeypatch):
 def test_lookup_gives_up_quietly():
     assert netbios.lookup("127.0.0.1", timeout=0.2) == ""
     assert netbios.lookup("::1", timeout=0.2) == ""
+
+
+def _response_with_mac(query_id, names, mac):
+    reply = _response(query_id, names)
+    stats_at = len(reply) - 46
+    return reply[:stats_at] + bytes(mac) + reply[stats_at + 6:]
+
+
+def test_parse_reads_the_mac_after_the_name_table():
+    reply = _response_with_mac(
+        7,
+        [("WORKGROUP", 0x00, 0x8400), ("PENS-SV01", 0x00, 0x0400)],
+        [0x00, 0x0C, 0x29, 0x00, 0x34, 0xE1],
+    )
+    assert netbios.parse_node_status_reply(reply, 7) == ("PENS-SV01", "00:0C:29:00:34:E1")
+
+
+def test_parse_treats_an_all_zero_mac_as_none():
+    # Samba fills the unit ID with zeros.
+    reply = _response(7, [("NAS", 0x00, 0x0400)])
+    assert netbios.parse_node_status_reply(reply, 7) == ("NAS", "")
+
+
+def test_parse_copes_with_a_reply_cut_short_before_the_mac():
+    reply = _response(7, [("PC", 0x00, 0x0400)])[:-46]
+    assert netbios.parse_node_status_reply(reply, 7) == ("PC", "")

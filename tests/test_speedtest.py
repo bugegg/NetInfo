@@ -315,3 +315,41 @@ def test_stop_before_the_ping_leaves_no_latency(server, monkeypatch):  # noqa: F
                                             streams=1, pause_s=1),
                            on_phase=on_phase, stop=stop)
     assert r.upload is not None and r.latency_ms is None
+
+
+def test_rank_servers_hands_over_the_reached_servers_as_they_come(monkeypatch):
+    import time as _time
+
+    from NetInfoView.ping.speedtest import ServerSpec
+
+    near, far, dead = (ServerSpec(n, f"https://{n}.example") for n in ("near", "far", "dead"))
+
+    def fake_time(spec, *a, **k):
+        if spec is far:
+            _time.sleep(0.3)
+            return 80.0
+        return None if spec is dead else 5.0
+
+    monkeypatch.setattr(speedtest, "connect_time_ms", fake_time)
+    monkeypatch.setattr(speedtest, "RANK_PROGRESS_S", 0)
+    partials = []
+    ranked = speedtest.rank_servers([far, dead, near], on_progress=partials.append)
+    assert [s.name for s, _ in ranked] == ["near", "far", "dead"]
+    # The near server shows up before the far one has been timed, and an
+    # unreachable one never appears in a partial list.
+    assert any([s.name for s, _ in p] == ["near"] for p in partials)
+    assert all("dead" not in [s.name for s, _ in p] for p in partials)
+
+
+def test_an_unreachable_server_is_tried_only_once(monkeypatch):
+    from NetInfoView.ping.speedtest import ServerSpec
+
+    attempts = []
+
+    def refuse(address, timeout):
+        attempts.append(address)
+        raise OSError("refused")
+
+    monkeypatch.setattr(speedtest.socket, "create_connection", refuse)
+    assert speedtest.connect_time_ms(ServerSpec("x", "https://x.example")) is None
+    assert len(attempts) == 1

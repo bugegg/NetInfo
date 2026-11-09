@@ -206,11 +206,15 @@ def sweep(
     max_hops: int = MAX_HOPS,
     stopped: Callable[[], bool] = lambda: False,
     on_ttl: Callable[[int], None] = lambda ttl: None,
+    on_partial: Callable[[Sweep], None] | None = None,
 ) -> Sweep:
     """Trace every flow to `ip`, one TTL at a time. A flow stops once the
     host (or a router saying it's unreachable) answers; the sweep stops when
     every flow has, `max_hops` runs out, or SILENT_LIMIT TTLs in a row bring
-    no answer at all."""
+    no answer at all.
+
+    ``on_partial``, if given, gets a copy of the trace so far after each
+    TTL, so the path can be drawn hop by hop rather than only at the end."""
     probe = probe or default_probe()
     result = Sweep(time.time(), flows, [[] for _ in range(flows)])
     active = list(range(flows))
@@ -229,12 +233,25 @@ def sweep(
             result.routes[flow].append(answers.get(flow))
         active = [f for f in active if not (f in answers and (answers[f].reached or answers[f].unreachable))]
         silent = 0 if answers else silent + 1
+        if on_partial is not None and answers:
+            on_partial(_trimmed(result))
         if silent >= SILENT_LIMIT:
             break
     for route in result.routes:  # silent hops past the last answer say nothing
         while route and route[-1] is None:
             route.pop()
     return result
+
+
+def _trimmed(result: Sweep) -> Sweep:
+    """A copy of `result` without each route's trailing silent hops."""
+    routes = []
+    for route in result.routes:
+        route = list(route)
+        while route and route[-1] is None:
+            route.pop()
+        routes.append(route)
+    return Sweep(result.started, result.flows, routes)
 
 
 # -- the graph -------------------------------------------------------------
