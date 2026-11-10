@@ -176,3 +176,23 @@ def test_sidebar_opens_repeat_ping(window):
     assert opened
     for each in opened:
         each.close()
+
+
+def test_repeat_count_regroups_its_digits_while_typing(qapp):
+    from PyQt6.QtCore import QLocale
+    from PyQt6.QtTest import QTest
+
+    spin = repeat_ping_window.GroupedSpinBox()
+    spin.setLocale(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
+    spin.setRange(1, repeat_ping.MAX_COUNT)
+    spin.setValue(1000)
+    edit = spin.lineEdit()
+    edit.selectAll()
+    QTest.keyClicks(edit, "100000")
+    assert edit.text() == "100,000" and spin.value() == 100000
+    assert edit.cursorPosition() == len("100,000")
+    # Typing in the middle keeps the cursor after the digit just typed.
+    edit.setCursorPosition(1)  # 1|00,000
+    QTest.keyClicks(edit, "5")
+    assert edit.text() == "1,500,000"
+    assert edit.cursorPosition() == 3  # 1,5|00,000

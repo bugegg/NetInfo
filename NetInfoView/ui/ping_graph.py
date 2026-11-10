@@ -794,7 +794,7 @@ class PingGraphWindow(QWidget):
             labels.append(label)
             panel.refresh(
                 label,
-                lambda since, k=panel.key: self._store.samples(k, since=since),
+                lambda since, k=panel.key: self._store.samples(k, since=since, until=end),
                 end,
                 span,
                 self._store.oldest(panel.key),

@@ -29,6 +29,36 @@ from .threads import retire, track
 #: The window's repeat count to start with (IOS's own default is 5).
 WINDOW_COUNT = 1000
 
+
+class GroupedSpinBox(QSpinBox):
+    """A spin box whose thousands separators move into place while typing
+    ("100000" reads "100,000" at once), not only once it loses focus. The
+    cursor stays after the same digit it was after."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setGroupSeparatorShown(True)
+        self.lineEdit().textEdited.connect(self._regroup)
+
+    def _regroup(self, text: str) -> None:
+        edit = self.lineEdit()
+        digits = "".join(c for c in text if c.isdigit())
+        if not digits:
+            return
+        value = min(int(digits), self.maximum())
+        grouped = self.textFromValue(value)
+        if grouped == text:
+            return
+        # Digits right of the cursor, to put it back in the same place.
+        after = sum(c.isdigit() for c in text[edit.cursorPosition():])
+        edit.setText(grouped)
+        position = len(grouped)
+        while after and position:
+            position -= 1
+            if grouped[position].isdigit():
+                after -= 1
+        edit.setCursorPosition(position)
+
 #: How often the result characters and the stats are passed to the window.
 UPDATE_INTERVAL_S = 0.1
 
@@ -108,10 +138,9 @@ class RepeatPingWindow(QWidget):
 
         self.host = QLineEdit(host)
         self.host.setPlaceholderText("IP address or host name")
-        self.count = QSpinBox()
+        self.count = GroupedSpinBox()
         self.count.setRange(1, repeat_ping.MAX_COUNT)
         self.count.setValue(WINDOW_COUNT)
-        self.count.setGroupSeparatorShown(True)
         self.count.setToolTip(
             "Repeat count. Everything else is Cisco's default: 100-byte datagrams, "
             "2 s timeout, data pattern 0xABCD"

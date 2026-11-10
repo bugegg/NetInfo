@@ -104,8 +104,9 @@ def test_mtu_is_checked_automatically_once_a_host_answers(qapp, tmp_path, monkey
     )
     started = []
     monkeypatch.setattr(MainWindow, "_start_mtu_check",
-                        lambda self, targets: (self._mtu_tried.update(k for k, _ in targets),
-                                               started.append(targets)))
+                        lambda self, targets, workers=mtu.MAX_WORKERS: (
+                            self._mtu_tried.update(k for k, _ in targets),
+                            started.append((targets, workers))))
     win = MainWindow(Settings())
     try:
         up, down = win._entries_from_parsed(parse_host_list("10.0.0.1\n10.0.0.2"))
@@ -114,7 +115,8 @@ def test_mtu_is_checked_automatically_once_a_host_answers(qapp, tmp_path, monkey
         win._on_results([(up.key, PingResult(PingStatus.SUCCEEDED, rtt_ms=1, timestamp=1)),
                          (down.key, PingResult(PingStatus.TIMEOUT, timestamp=1))])
         win._auto_check_mtu()
-        assert started == [[(up.key, "10.0.0.1")]]
+        # A few /sbin/ping processes at a time, not the menu's full pool.
+        assert started == [([(up.key, "10.0.0.1")], mtu.BACKGROUND_WORKERS)]
         win._auto_check_mtu()  # checked once, not every tick
         assert len(started) == 1
     finally:

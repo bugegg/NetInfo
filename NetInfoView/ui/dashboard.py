@@ -334,17 +334,20 @@ class LatencyChart(QWidget):
     def _latest_end(self) -> float:
         return self.window._stopped_at or time.time()
 
-    def _max_offset(self) -> float:
-        """How far back there's history to show for the selected host."""
+    def _selected_key(self) -> int | None:
         selected = self.window._selected_entries()
-        history = self.window._samples.samples(selected[0].key) if len(selected) == 1 else []
-        if not history:
+        return selected[0].key if len(selected) == 1 else None
+
+    def _max_offset(self, key: int | None) -> float:
+        """How far back there's history to show for host `key`."""
+        oldest = self.window._samples.oldest(key) if key is not None else None
+        if oldest is None:
             return 0.0
-        return max(0.0, self._latest_end() - history[0].timestamp - self.window_seconds)
+        return max(0.0, self._latest_end() - oldest - self.window_seconds)
 
     def scroll_by(self, seconds: float) -> None:
         """Move the chart back (positive) or forward in time."""
-        self.offset = min(self._max_offset(), max(0.0, self.offset + seconds))
+        self.offset = min(self._max_offset(self._selected_key()), max(0.0, self.offset + seconds))
         self.update()
 
     def mousePressEvent(self, event):
@@ -398,11 +401,10 @@ class LatencyChart(QWidget):
         key = selected[0].key if len(selected) == 1 else None
         if key != self._key:
             self._key, self.offset = key, 0.0
-        self.offset = min(self.offset, self._max_offset())
+        self.offset = min(self.offset, self._max_offset(key))
         end = self._latest_end() - self.offset
         start = end - span
-        samples = ([s for s in self.window._samples.samples(key, start) if s.timestamp <= end]
-                   if key is not None else [])
+        samples = self.window._samples.samples(key, start, end) if key is not None else []
         plot = self._plot()
         ceiling = nice_ceiling(max((s.rtt_ms or 0 for s in samples), default=10) * 1.15)
         steps = y_steps(ceiling)
@@ -513,13 +515,17 @@ class Dashboard(QWidget):
         layout.addWidget(splitter, 1)
         root.addWidget(body, 1)
 
+        #: The badge colours last applied, so its style sheet is only
+        #: re-parsed when the status actually changes.
+        self._badge_colors: tuple[str, str] | None = None
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self.refresh)
+        self.timer.timeout.connect(self._tick)
         self.timer.start(1000)
         for signal in (window._model.modelReset, window._model.rowsInserted,
                        window._model.rowsRemoved):
             signal.connect(self.refresh)
-        window._table.selectionModel().selectionChanged.connect(self.refresh)
+        # A selection change needs no hookup here: MainWindow's
+        # _update_status_bar already refreshes this on every one.
         self.apply_icons()
         self.refresh()
 
@@ -932,6 +938,13 @@ class Dashboard(QWidget):
         iface = self.interfaces[0]
         return f"Local network · {iface.cidr}", iface.ip_address
 
+    def _tick(self) -> None:
+        """The once-a-second refresh, skipped while nobody can see it (the
+        window minimised or hidden); the first tick after it is back
+        catches up."""
+        if self.isVisible() and not self.window.isMinimized():
+            self.refresh()
+
     def refresh(self, *_):
         w = self.window
         entries = w._model.entries()
@@ -949,8 +962,10 @@ class Dashboard(QWidget):
         self.subtitle.setText(subtitle)
         self.connection_state.setText("Go Live!" if ip else "Not connected")
         self.connection_ip.setText(ip)
-        self.connection_dot.setObjectName("dotOnline" if ip else "dotOffline")
-        self.connection_dot.style().polish(self.connection_dot)
+        dot = "dotOnline" if ip else "dotOffline"
+        if self.connection_dot.objectName() != dot:
+            self.connection_dot.setObjectName(dot)
+            self.connection_dot.style().polish(self.connection_dot)
 
         running = w._engine is not None
         self.start_button.setVisible(not running)
@@ -998,8 +1013,10 @@ class Dashboard(QWidget):
         self.selection_rule.setVisible(not same)
         text, bg, fg = status_badge(e)
         self.selection_badge.setText(f"●  {text}")
-        self.selection_badge.setStyleSheet(
-            f"background: {bg}; color: {fg}; border-radius: 9px; padding: 2px 9px; font-weight: 600;")
+        if self._badge_colors != (bg, fg):
+            self._badge_colors = (bg, fg)
+            self.selection_badge.setStyleSheet(
+                f"background: {bg}; color: {fg}; border-radius: 9px; padding: 2px 9px; font-weight: 600;")
         latency = "—" if e.last_rtt_ms is None else f"{e.last_rtt_ms:g} ms"
         exact = e.last_status.value if e.last_status else "Not pinged yet"
         fields = {

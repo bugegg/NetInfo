@@ -47,6 +47,10 @@ WAIT_MS = 1000
 #: too-big probe took twice WAIT_MS.
 WAIT_ARGS = ("-t", str(max(1, WAIT_MS // 1000)))
 MAX_WORKERS = 32
+#: For the automatic check that runs on its own while pinging: each probe is
+#: a /sbin/ping process, so 32 at once made the Mac stutter when a scan's
+#: first replies came in. Check MTU from the menu still uses MAX_WORKERS.
+BACKGROUND_WORKERS = 6
 
 Probe = Callable[[str, int], bool]
 LinkMtu = Callable[[str], int | None]
@@ -163,12 +167,13 @@ def find_many(
     on_result: Callable[[int, int | None], None],
     probe: Probe = probe,
     link_mtu: LinkMtu = cached_route_mtu,
+    workers: int = MAX_WORKERS,
 ) -> None:
     """find_mtu for each (key, ip), several at once, reporting each as it's
     found."""
     if not targets:
         return
-    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(targets))) as pool:
+    with ThreadPoolExecutor(max_workers=max(1, min(workers, len(targets)))) as pool:
         futures = {pool.submit(find_mtu, ip, probe, link_mtu): key for key, ip in targets}
         for future in as_completed(futures):
             on_result(futures[future], future.result())
