@@ -40,7 +40,7 @@ from ..model.history import HistoryFilterProxy, HistoryModel, HistoryRecord
 from ..model.host import HostEntry
 from ..model.samples import SampleStore
 from ..model.table_model import HostFilterProxy, HostTableModel
-from ..ping import port_scan, snmp, snmp_arp
+from ..ping import mtu, port_scan, snmp, snmp_arp
 from ..ping.device_info import DeviceInfoJob
 from ..ping.engine import EngineOptions
 from ..ping.icmp import _IP_DONTFRAG
@@ -925,13 +925,15 @@ class MainWindow(QMainWindow):
             and e.key not in self._mtu_tried
         ]
         if targets:
-            self._start_mtu_check(targets)
+            self._start_mtu_check(targets, workers=mtu.BACKGROUND_WORKERS)
 
-    def _start_mtu_check(self, targets: list[tuple[int, str]]) -> None:
+    def _start_mtu_check(
+        self, targets: list[tuple[int, str]], workers: int = mtu.MAX_WORKERS
+    ) -> None:
         self._mtu_tried.update(key for key, _ in targets)
         self._mtu_pending = len(targets)
         self.statusBar().showMessage(f"Checking MTU of {len(targets)} host(s)...")
-        thread = MtuThread(targets)
+        thread = MtuThread(targets, workers)
         thread.result_ready.connect(self._on_mtu_result)
         thread.finished.connect(self._on_mtu_finished)
         self._mtu_thread = thread
@@ -1079,7 +1081,8 @@ class MainWindow(QMainWindow):
         if self._proxy.display_mode is not DisplayMode.ALL:
             # The proxy already re-filtered the rows apply_results reported
             # changed (it does for every dataChanged); only the count is new.
-            self._update_status_bar()
+            # The dashboard's own once-a-second tick picks up the rest.
+            self._update_status_text()
 
     def _refresh_device_info(self) -> None:
         """Kick off a background sweep to fill in MAC, hostname, vendor, a
@@ -1448,6 +1451,13 @@ class MainWindow(QMainWindow):
     # -- status bar --------------------------------------------------------
 
     def _update_status_bar(self, *_) -> None:
+        self._update_status_text()
+        self._history_proxy.set_filter_keys({e.key for e in self._selected_entries()})
+        if hasattr(self, "_dashboard"):
+            self._dashboard.refresh()
+
+    def _update_status_text(self) -> None:
+        """Just the status bar's message: cheap enough for every result batch."""
         total = self._proxy.rowCount()
         selected = len(self._table.selectionModel().selectedRows())
         state = "Pinging" if self._engine is not None else "Stopped"
@@ -1460,9 +1470,6 @@ class MainWindow(QMainWindow):
         if selected:
             message += f" · {selected} selected"
         self.statusBar().showMessage(message)
-        self._history_proxy.set_filter_keys({e.key for e in self._selected_entries()})
-        if hasattr(self, "_dashboard"):
-            self._dashboard.refresh()
 
     # -- shutdown ----------------------------------------------------------
 

@@ -30,6 +30,20 @@ def test_store_keeps_failed_pings_as_none_and_caps_per_host():
     assert store.samples(99) == []
 
 
+def test_store_stays_capped_over_many_pings_and_slices_by_time():
+    store = SampleStore(per_host=10)
+    for t in range(1, 1001):
+        store.add(1, _ok(t, t) if t % 3 else _lost(t))
+    kept = store.samples(1)
+    assert [s.timestamp for s in kept] == list(range(991, 1001))
+    assert store.oldest(1) == 991
+    assert [s.rtt_ms for s in kept[:3]] == [991, 992, None]  # 993 was lost
+    # The backing arrays are cut back rather than growing with every ping.
+    assert len(store._samples[1].times) < 2 * 10
+    assert [s.timestamp for s in store.samples(1, since=995, until=997)] == [995, 996, 997]
+    assert store.samples(1, since=2000) == []
+
+
 def test_store_retain_drops_removed_hosts():
     store = SampleStore()
     store.add(1, _ok(1, 1))

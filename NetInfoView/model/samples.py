@@ -7,7 +7,9 @@ host, whereas a graph needs every ping of one host regardless of that filter.
 
 from __future__ import annotations
 
-from collections import deque
+import math
+from array import array
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 
 from ..ping.result import PingResult
@@ -37,33 +39,70 @@ class SampleStats:
         return (self.lost / self.sent * 100.0) if self.sent else 0.0
 
 
+class _Series:
+    """One host's samples as two flat arrays of doubles (a failed ping's
+    RTT is NaN): 16 bytes a sample, where a deque of Sample objects took
+    about 100. Pings arrive in time order, so ranges are found by bisect.
+
+    The oldest samples beyond the cap are skipped by moving ``start`` and
+    cut off in one go once half a cap of them has piled up."""
+
+    __slots__ = ("times", "rtts", "start")
+
+    def __init__(self) -> None:
+        self.times = array("d")
+        self.rtts = array("d")
+        self.start = 0
+
+    def __len__(self) -> int:
+        return len(self.times) - self.start
+
+    def append(self, timestamp: float, rtt_ms: float | None, cap: int) -> None:
+        self.times.append(timestamp)
+        self.rtts.append(math.nan if rtt_ms is None else rtt_ms)
+        if len(self) > cap:
+            self.start += 1
+            if self.start >= max(1, cap // 2):
+                del self.times[: self.start]
+                del self.rtts[: self.start]
+                self.start = 0
+
+    def slice(self, since: float | None, until: float | None) -> list[Sample]:
+        times = self.times
+        i = self.start if since is None else bisect_left(times, since, self.start)
+        j = len(times) if until is None else bisect_right(times, until, i)
+        return [Sample(t, None if r != r else r)
+                for t, r in zip(times[i:j], self.rtts[i:j])]
+
+
 class SampleStore:
-    """A capped ring buffer of samples per host key."""
+    """A capped buffer of samples per host key."""
 
     def __init__(self, per_host: int = DEFAULT_SAMPLES_PER_HOST) -> None:
         self.per_host = per_host
-        self._samples: dict[int, deque[Sample]] = {}
+        self._samples: dict[int, _Series] = {}
 
     def add(self, key: int, result: PingResult) -> None:
-        buffer = self._samples.get(key)
-        if buffer is None:
-            buffer = self._samples[key] = deque(maxlen=self.per_host)
-        buffer.append(
-            Sample(result.timestamp, result.rtt_ms if result.succeeded else None)
+        series = self._samples.get(key)
+        if series is None:
+            series = self._samples[key] = _Series()
+        series.append(
+            result.timestamp, result.rtt_ms if result.succeeded else None, self.per_host
         )
 
-    def samples(self, key: int, since: float | None = None) -> list[Sample]:
-        buffer = self._samples.get(key)
-        if not buffer:
+    def samples(
+        self, key: int, since: float | None = None, until: float | None = None
+    ) -> list[Sample]:
+        """This host's samples from `since` to `until` (both inclusive)."""
+        series = self._samples.get(key)
+        if not series:
             return []
-        if since is None:
-            return list(buffer)
-        return [s for s in buffer if s.timestamp >= since]
+        return series.slice(since, until)
 
     def oldest(self, key: int) -> float | None:
         """Timestamp of the earliest sample still kept for this host."""
-        buffer = self._samples.get(key)
-        return buffer[0].timestamp if buffer else None
+        series = self._samples.get(key)
+        return series.times[series.start] if series else None
 
     def discard(self, key: int) -> None:
         self._samples.pop(key, None)
