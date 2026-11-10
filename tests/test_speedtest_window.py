@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import QApplication
 from NetInfoView.ping import device_link, logos, provider, speedtest
 from NetInfoView.ping.device_link import DeviceLink
 from NetInfoView.ping.provider import Provider
+from NetInfoView.ping.speed_locations import locate
 from NetInfoView.ping.speedtest import SpeedResult, TransferResult
 from NetInfoView.ui.speedtest_window import (
     Gauge, SpeedTestWindow, format_mbps, result_text, server_text,
@@ -371,3 +372,71 @@ def test_ipv4_only_connection(qapp, monkeypatch):
     assert w.public_ipv6.text() == "–" and not w.copy_public6.isEnabled()
     w.close()
 
+
+
+def test_automatic_tries_the_nearest_ookla_servers(qapp):
+    ookla = speedtest.FALLBACK_OOKLA
+    ranked = [(speedtest.FALLBACK_SERVERS[0], 3.0),  # nearer, but not Ookla
+              (ookla[0], 20.0), (ookla[1], 8.0), (ookla[2], None), (ookla[3], 9.0)]
+    w = SpeedTestWindow(load_servers=False)
+    assert w.options().server == speedtest.CLOUDFLARE  # until the list is timed
+    assert w.options().candidates == ()
+    w._servers_loaded(ranked)
+    opts = w.options()
+    assert opts.candidates == (ookla[1], ookla[3], ookla[0])  # nearest first
+    assert w.server.text.text() == "Automatic (fastest nearby)"
+    # After a run, the one it picked is named.
+    w._finished(SpeedResult(meta={"server_url": ookla[3].url, "host": "x"}))
+    assert w.server.text.text() == f"Automatic · {locate(ookla[3]).short}"
+    # A server chosen by hand is used as is, with nothing to try first.
+    w.set_choice(ookla[0])
+    assert w.options().server == ookla[0] and w.options().candidates == ()
+    w.close()
+
+
+def test_automatic_is_remembered_as_automatic(window):  # noqa: F811
+    w = window.speed_test()
+    _wait(lambda: w._list_thread is None)
+    w._servers_loaded([(speedtest.FALLBACK_OOKLA[1], 8.0)])
+    w.set_choice(speedtest.CLOUDFLARE)
+    w._remember_choice(w.options())
+    # Not the server it resolved to this time, so the next run picks afresh.
+    assert window.settings.speed_test_server == speedtest.CLOUDFLARE.url
+    w.close()
+
+
+def test_nearest_ookla_ignores_unreachable_and_other_kinds():
+    a, b, c = speedtest.FALLBACK_OOKLA[:3]
+    other = speedtest.FALLBACK_SERVERS[0]
+    ranked = [(a, 30.0), (b, None), (other, 1.0), (c, 12.0)]
+    assert speedtest.nearest_ookla(ranked) == [(c, 12.0)]
+    assert speedtest.nearest_ookla(ranked, 5) == [(c, 12.0), (a, 30.0)]
+    assert speedtest.nearest_ookla([(b, None)]) == []
+
+
+def test_graph_reads_the_clock_and_shows_the_hovered_reading(qapp):
+    from PyQt6.QtCore import QPointF
+
+    from NetInfoView.ui.speedtest_window import LiveGraph, _clock
+
+    g = LiveGraph()
+    g.resize(800, 240)
+    g.reset(10.0)
+    g.begin("download")
+    start = g.phase_start["download"]
+    for i in range(1, 101):
+        g.add("download", i / 10, 300.0 if i < 50 else 500.0)
+    g.grab()  # paint once, so the panes are laid out
+    plot = g._plots["download"]
+    # Over the pane at 8 s into the download: the 500 Mbps reading there.
+    g.hover = QPointF(plot.left() + plot.width() * 0.8, plot.center().y())
+    phase, when, value = g.hovered()
+    assert phase == "download" and value == 500.0
+    assert when == pytest.approx(start + 8.0, abs=0.06)
+    g.grab()  # the readout paints without error
+    # Off the panes, or over a pane with no readings yet: nothing.
+    g.hover = QPointF(2, 2)
+    assert g.hovered() is None
+    g.hover = QPointF(g._plots["upload"].center())
+    assert g.hovered() is None
+    assert len(_clock(start)) == 8 and _clock(start).count(":") == 2
