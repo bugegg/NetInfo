@@ -205,6 +205,10 @@ class ServerPicker(QFrame):
         self._chip_group.setExclusive(True)
 
         self._cloudflare_ms: float | None = None
+        #: The nearest Ookla server once the list is timed, with its connect
+        #: time: Automatic picks the fastest of the few nearest; until then
+        #: it runs on Cloudflare.
+        self.nearest: tuple[ServerSpec, float] | None = None
         self.automatic: ServerRow | None = None
         self._auto_slot = QVBoxLayout()
         self._auto_slot.setContentsMargins(0, 0, 0, 0)
@@ -292,6 +296,12 @@ class ServerPicker(QFrame):
         self._rebuild_chips()
         self._rebuild()
 
+    def set_nearest(self, nearest: tuple[ServerSpec, float] | None) -> None:
+        if sip.isdeleted(self) or sip.isdeleted(self.list_layout):
+            return
+        self.nearest = nearest
+        self._rebuild()
+
     def set_cloudflare_latency(self, ms: float | None) -> None:
         if sip.isdeleted(self) or sip.isdeleted(self.list_layout):
             return  # the window went while the timing was on its way
@@ -353,9 +363,15 @@ class ServerPicker(QFrame):
             self._auto_slot.removeWidget(self.automatic)
             self.automatic.hide()
             self.automatic.deleteLater()
+        if self.nearest is not None:
+            spec, auto_ms = self.nearest
+            auto_line = "Fastest of the nearest servers in Thailand"
+        else:
+            auto_ms = self._cloudflare_ms
+            auto_line = "Lowest latency · Cloudflare"
         self.automatic = ServerRow(CLOUDFLARE, self._badge(icon="globe"), "Automatic",
-                                   ["Lowest latency · Cloudflare"], ms=self._cloudflare_ms,
-                                   show_latency=self._cloudflare_ms is not None, theme=theme)
+                                   [auto_line], ms=auto_ms,
+                                   show_latency=auto_ms is not None, theme=theme)
         self.automatic.setObjectName("autoRow")
         self.automatic.clicked.connect(lambda: self._select(CLOUDFLARE))
         self._auto_slot.addWidget(self.automatic)
@@ -422,6 +438,8 @@ class ServerPicker(QFrame):
 
     def selected_text(self, choice: Choice) -> str:
         if same_choice(choice, CLOUDFLARE):
+            if self.nearest is not None:
+                return "Automatic · fastest nearby server"
             return "Automatic · Cloudflare"
         if isinstance(choice, ServerSpec):
             return locate(choice).short

@@ -44,7 +44,7 @@ from ..ping.speedtest import CLOUDFLARE, ServerSpec, SpeedResult, SpeedTestOptio
 from ..ping.speed_locations import locate
 from . import fonts
 from .provider_badge import LogoStore, ProviderBadge, signal_pixmap
-from .server_picker import ServerPicker
+from .server_picker import ServerPicker, same_choice
 from .threads import retire, track
 
 BLUE = "#087dff"     # download
@@ -402,6 +402,36 @@ class LiveGraph(Themed, QWidget):
         self.series: dict[str, list[tuple[float, float]]] = {"download": [], "upload": []}
         self.phase_start: dict[str, float] = {}
         self.start = 0.0
+        #: The mouse, while it's over the graph: the nearest reading is shown.
+        self.hover: QPointF | None = None
+        #: Each pane's plot area as last painted, for finding what's hovered.
+        self._plots: dict[str, QRectF] = {}
+        self.setMouseTracking(True)
+
+    def mouseMoveEvent(self, event) -> None:
+        self.hover = event.position()
+        self.update()
+
+    def leaveEvent(self, event) -> None:
+        self.hover = None
+        self.update()
+        super().leaveEvent(event)
+
+    def hovered(self) -> tuple[str, float, float] | None:
+        """(phase, time, Mbps) of the reading nearest the mouse in the pane
+        it's over, or None."""
+        if self.hover is None:
+            return None
+        for phase, plot in self._plots.items():
+            points = self.series.get(phase) or []
+            start = self.phase_start.get(phase)
+            if start is None or not points or not (plot.left() - 4 <= self.hover.x() <= plot.right() + 4
+                                                     and plot.top() <= self.hover.y() <= plot.bottom() + 24):
+                continue
+            t = start + (self.hover.x() - plot.left()) / plot.width() * self.duration
+            when, value = min(points, key=lambda point: abs(point[0] - t))
+            return phase, when, value
+        return None
 
     def reset(self, duration: float) -> None:
         self.duration = duration
@@ -467,8 +497,16 @@ class LiveGraph(Themed, QWidget):
                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                        f"{step * i:,.0f}")
 
-        seconds_step = 1 if self.duration <= 5 else 2 if self.duration <= 10 else 5
+        # The time axis reads the clock once a phase has run ("14:32:05"),
+        # every 1, 2, 5 or 10 s, as close together as the labels fit.
+        label_w = fm.horizontalAdvance("00:00:00") + 12
+        seconds_step = next((s for s in (1, 2, 5, 10)
+                             if s >= self.duration / 10
+                             and pane_w * s / self.duration >= label_w), 10)
+        self._plots = {}
         for phase, title, color, plot in panes:
+            self._plots[phase] = plot
+            phase_start = self.phase_start.get(phase)
             # Pane title, grid, and its own 0 s … duration axis.
             p.setPen(QColor(color))
             p.drawText(QRectF(plot.left(), 0, plot.width(), 20),
@@ -486,11 +524,12 @@ class LiveGraph(Themed, QWidget):
                 align = (Qt.AlignmentFlag.AlignLeft if t == 0 else
                          Qt.AlignmentFlag.AlignRight if t + seconds_step > self.duration
                          else Qt.AlignmentFlag.AlignHCenter)
-                box = (QRectF(x, plot.bottom() + 6, 50, 18) if t == 0 else
-                       QRectF(x - 50, plot.bottom() + 6, 50, 18)
+                box = (QRectF(x, plot.bottom() + 6, label_w, 18) if t == 0 else
+                       QRectF(x - label_w, plot.bottom() + 6, label_w, 18)
                        if t + seconds_step > self.duration else
-                       QRectF(x - 25, plot.bottom() + 6, 50, 18))
-                p.drawText(box, align | Qt.AlignmentFlag.AlignVCenter, f"{t:g} s")
+                       QRectF(x - label_w / 2, plot.bottom() + 6, label_w, 18))
+                text = (_clock(phase_start + t) if phase_start is not None else f"{t:g} s")
+                p.drawText(box, align | Qt.AlignmentFlag.AlignVCenter, text)
                 t += seconds_step
 
             points = self.series.get(phase) or []
@@ -524,6 +563,39 @@ class LiveGraph(Themed, QWidget):
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawPath(line)
             p.restore()
+
+        hovered = self.hovered()
+        if hovered is not None:
+            self._paint_hover(p, c, fm, *hovered, ceiling)
+
+    def _paint_hover(self, p: QPainter, c, fm, phase: str, when: float, value: float,
+                     ceiling: float) -> None:
+        """A guide line and dot at the reading, with its time and speed."""
+        plot, start = self._plots[phase], self.phase_start[phase]
+        color = QColor(BLUE if phase == "download" else PURPLE)
+        x = plot.left() + min(max((when - start) / self.duration, 0.0), 1.0) * plot.width()
+        y = plot.bottom() - min(value, ceiling) / ceiling * plot.height()
+        p.setPen(QPen(c["muted"], 1, Qt.PenStyle.DashLine))
+        p.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()))
+        p.setPen(QPen(c["panel"], 2))
+        p.setBrush(color)
+        p.drawEllipse(QPointF(x, y), 4.5, 4.5)
+        text = f"{format_mbps(value)} Mbps · {_clock(when)}"
+        w, h = fm.horizontalAdvance(text) + 16, fm.height() + 8
+        # Beside the dot, kept inside the pane.
+        left = x + 10 if x + 10 + w <= plot.right() else x - 10 - w
+        top = min(max(y - h - 8, plot.top()), plot.bottom() - h)
+        box = QRectF(max(plot.left(), left), top, w, h)
+        p.setPen(QPen(c["border"], 1))
+        p.setBrush(c["panel"])
+        p.drawRoundedRect(box, 6, 6)
+        p.setPen(c["ink"])
+        p.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+
+
+def _clock(timestamp: float) -> str:
+    """Local wall-clock time, "14:32:05"."""
+    return time.strftime("%H:%M:%S", time.localtime(timestamp))
 
 
 def _chevron_file(color: str) -> str:
@@ -650,10 +722,24 @@ class ServerField(QPushButton):
     def show_choice(self, choice: ServerSpec | str, colo: str = "") -> None:
         self._choice, self._colo = choice, colo
         muted = getattr(self, "_muted", "#5f6673")
+        #: Set by the window: the server Automatic last tested against, and
+        #: whether there are nearby servers for it to choose among yet.
+        picked = getattr(self, "picked", None)
+        nearby = getattr(self, "nearby", False)
         if isinstance(choice, ServerSpec) and choice.url == CLOUDFLARE.url:
             self.lead.set_pixmap(glyphs.pixmap("globe", BLUE, 16))
-            self.text.setText(f"Automatic · {colo}" if colo else "Automatic (Cloudflare)")
-            self.setToolTip("Cloudflare's nearest data centre")
+            if picked is not None and not colo:
+                self.text.setText(f"Automatic · {locate(picked).short}")
+                self.setToolTip(f"The fastest nearby server last time: {picked.name}\n"
+                                f"{picked.url}")
+            elif nearby and not colo:
+                self.text.setText("Automatic (fastest nearby)")
+                self.setToolTip("Tries the nearest few servers in Thailand for a second "
+                                "each, then tests the fastest")
+            else:
+                self.text.setText(f"Automatic · {colo}" if colo else "Automatic (Cloudflare)")
+                self.setToolTip("Cloudflare's nearest data centre, until the nearest "
+                                "server in Thailand is found")
         elif isinstance(choice, ServerSpec):
             where = locate(choice)
             self.lead.set_provider(where.sponsor or where.country, server_domain(choice),
@@ -712,14 +798,17 @@ class SpeedTestWindow(QWidget):
         self._local_ip = ""
 
         self._choice: ServerSpec | str = CLOUDFLARE
+        #: What Automatic (the CLOUDFLARE choice) chooses among: the nearest
+        #: few Ookla servers once the list is timed (speedtest.nearest_ookla).
+        self._candidates: tuple[ServerSpec, ...] = ()
         self._pending_url = ""
         #: Providers' logos, from their websites (ping/logos.py).
         self.logos = LogoStore(self)
         self.server = ServerField()
         self.server.logos = self.logos
-        self.server.setToolTip("Click to choose where the test runs: Automatic (Cloudflare's "
-                               "nearest data centre), a server in Thailand or abroad, or your "
-                               "own server's URL")
+        self.server.setToolTip("Click to choose where the test runs: Automatic (the nearest "
+                               "server in Thailand, as speedtest.net picks), a server in "
+                               "Thailand or abroad, or your own server's URL")
         self.server.clicked.connect(self.open_picker)
         self.duration = QComboBox()
         for text, seconds in DURATIONS:
@@ -946,7 +1035,8 @@ class SpeedTestWindow(QWidget):
         settings = self._settings()
         if settings is None:
             return
-        server = options.server
+        # The choice, not the server Automatic resolved to this time.
+        server = self._choice
         settings.speed_test_server = server.url if isinstance(server, ServerSpec) else server
         settings.speed_test_seconds = options.duration_s
 
@@ -1275,6 +1365,18 @@ class SpeedTestWindow(QWidget):
     def _servers_partial(self, ranked) -> None:
         if not self._gone():
             self.picker.set_servers(ranked)
+            self._set_nearest(ranked)
+
+    def _set_nearest(self, ranked) -> None:
+        nearest = speedtest.nearest_ookla(ranked, speedtest.AUTO_CANDIDATES)
+        candidates = tuple(spec for spec, _ in nearest)
+        if candidates == self._candidates:
+            return
+        self._candidates = candidates
+        self.server.nearby = bool(candidates)
+        self.picker.set_nearest(nearest[0] if nearest else None)
+        if self._thread is None and same_choice(self._choice, CLOUDFLARE):
+            self.set_choice(self._choice)
 
     @from_thread
     def _servers_loaded(self, ranked) -> None:
@@ -1282,6 +1384,7 @@ class SpeedTestWindow(QWidget):
             return
         self._list_thread = None
         self.picker.set_servers(ranked)
+        self._set_nearest(ranked)
         wanted, self._pending_url = self._pending_url, ""
         spec = next((s for s, _ in ranked if wanted and s.url == wanted), None)
         if spec is not None and self._choice == wanted:
@@ -1479,6 +1582,10 @@ class SpeedTestWindow(QWidget):
     # ----------------------------------------------------------- running
 
     def options(self) -> SpeedTestOptions:
+        if same_choice(self._choice, CLOUDFLARE) and self._candidates:
+            # Automatic: the fastest of the nearest few, found at the start.
+            return SpeedTestOptions(server=self._candidates[0], candidates=self._candidates,
+                                    duration_s=self.duration.currentData())
         return SpeedTestOptions(server=self._choice, duration_s=self.duration.currentData())
 
     def _toggle(self) -> None:
@@ -1539,7 +1646,8 @@ class SpeedTestWindow(QWidget):
         self.gauge.set_value(0.0, phase)
         if phase in ("download", "upload"):
             self.graph.begin(phase)
-        self._set_status("run", {"connect": "Connecting…",
+        self._set_status("run", {"choose": "Choosing the fastest nearby server…",
+                                 "connect": "Connecting…",
                                  "download": "Testing download…",
                                  "upload": "Testing upload…"}.get(phase, ""))
 
@@ -1583,8 +1691,11 @@ class SpeedTestWindow(QWidget):
 
     def _finished(self, result: SpeedResult) -> None:
         self._result = result
-        if self._choice is CLOUDFLARE or self._choice == CLOUDFLARE:
-            self.server.show_choice(CLOUDFLARE, result.meta.get("colo", ""))
+        if same_choice(self._choice, CLOUDFLARE):
+            url = result.meta.get("server_url", "")
+            self.server.picked = next((s for s in self._candidates if s.url == url), None)
+            colo = "" if self.server.picked else result.meta.get("colo", "")
+            self.server.show_choice(CLOUDFLARE, colo)
         self.server_label.setText(self._footer_text())
         self._show_cards(result)
         if result.upload is None and self.card_up.note.text().startswith("Measuring"):

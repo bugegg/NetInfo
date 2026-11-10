@@ -44,6 +44,33 @@ def test_rolling_mbps_smooths_bursts_one_round_trip_apart():
     assert speedtest.rolling_mbps(points[:1]) == 0.0
 
 
+def test_average_leaves_out_the_fastest_and_slowest_slices():
+    # 40 Mbps (0.5 MB per 0.1 s) for 2 s, but stalled for 0.2 s of it and
+    # with one 0.1 s burst: the plain average would swing with both.
+    points, total = [(0.0, 0)], 0
+    for i in range(1, 21):
+        total += {5: 0, 6: 0, 15: 2_000_000}.get(i, 500_000)
+        points.append((i / 10, total))
+    plain = speedtest.mbps(total, 2.0)
+    assert plain != pytest.approx(40.0)
+    assert speedtest.trimmed_mbps(points) == pytest.approx(40.0)
+    assert summarize(points, ramp_s=0.0).mbps == pytest.approx(40.0)
+
+
+def test_trimmed_average_falls_back_to_plain_with_few_points():
+    points = [(0.0, 0), (0.5, 1_000_000), (1.0, 3_000_000)]
+    assert speedtest.trimmed_mbps(points) == pytest.approx(24.0)
+
+
+def test_next_chunk_aims_for_a_few_seconds_per_request():
+    target = speedtest.REQUEST_TARGET_S
+    # 25 MB in 0.5 s (400 Mbps): the next one is 50 MB per second of target.
+    assert speedtest.next_chunk(25_000_000, 0.5, speedtest.MAX_CHUNK) == int(50_000_000 * target)
+    assert speedtest.next_chunk(25_000_000, 0.01, 60_000_000) == 60_000_000  # capped
+    assert speedtest.next_chunk(25_000_000, 1000.0, speedtest.MAX_CHUNK) == speedtest.MIN_CHUNK
+    assert speedtest.next_chunk(25_000_000, 0.0, speedtest.MAX_CHUNK) == 25_000_000
+
+
 def test_summarize_uses_everything_when_too_short_for_the_ramp():
     r = summarize([(0.0, 0), (0.5, 1_000_000)], ramp_s=2.0)
     assert r.mbps == pytest.approx(16.0)
@@ -72,6 +99,10 @@ def test_parse_trace():
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     uploaded = 0
+    #: Downloads bigger than this get a 403, as Cloudflare does from 100 MB.
+    max_down: int | None = None
+    #: Sizes of the downloads asked for.
+    requested: list[int] = []
 
     def log_message(self, *args):
         pass
@@ -97,6 +128,12 @@ class _Handler(BaseHTTPRequestHandler):
             n = int(self.path.split("ckSize=")[1]) * 1_048_576
         else:
             n = int(self.path.split("bytes=")[1]) if "bytes=" in self.path else 0
+        type(self).requested.append(n)
+        if self.max_down is not None and n > self.max_down:
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         known = ("__down" in self.path or "garbage.php" in self.path or "empty.php" in self.path
                  or self.path.startswith("/download"))
         self.send_response(200 if known else 404)
@@ -353,3 +390,45 @@ def test_an_unreachable_server_is_tried_only_once(monkeypatch):
     monkeypatch.setattr(speedtest.socket, "create_connection", refuse)
     assert speedtest.connect_time_ms(ServerSpec("x", "https://x.example")) is None
     assert len(attempts) == 1
+
+
+def test_download_halves_and_stays_under_a_size_the_server_refuses(server, monkeypatch):
+    monkeypatch.setattr(speedtest, "DOWN_CHUNK", 2_000_000)
+    monkeypatch.setattr(_Handler, "max_down", 1_500_000)
+    monkeypatch.setattr(_Handler, "requested", [])
+    opts = SpeedTestOptions(server=server, duration_s=0.5, ramp_s=0.1, streams=1)
+    r = speedtest.run_transfer(_Server(server), upload=False, options=opts)
+    assert r.bytes > 0
+    asked = [n for n in _Handler.requested if n]  # not the 0-byte pings alongside
+    assert asked[0] == 2_000_000 and asked[1] == 1_000_000
+    # Grown again on loopback's speed, but never back past the refused size.
+    assert all(n <= 1_000_000 for n in asked[1:])
+
+
+def test_cloudflare_downloads_start_under_its_limit():
+    cloudflare = _Server(speedtest.CLOUDFLARE)
+    assert cloudflare.max_down == speedtest.CLOUDFLARE_MAX_DOWN < 100_000_000
+    assert _Server("https://speed.example.com").max_down == speedtest.MAX_CHUNK
+    assert speedtest.DOWN_CHUNK == speedtest.UP_CHUNK == 100_000_000
+
+
+def test_automatic_tests_the_fastest_candidate(server, monkeypatch):
+    slow = ServerSpec("Slow", server + "/slow", "ookla")
+    fast = ServerSpec("Fast", server + "/fast", "ookla")
+    dead = ServerSpec("Dead", "http://127.0.0.1:9", "ookla")
+    speeds = {"Slow": 100.0, "Fast": 400.0}
+
+    def probe(srv, upload, options, on_sample=None, stop=None):
+        if srv.spec.name not in speeds:
+            raise OSError("refused")
+        return speedtest.TransferResult(mbps=speeds[srv.spec.name])
+
+    monkeypatch.setattr(speedtest, "run_transfer", probe)
+    assert speedtest.pick_fastest((slow, dead, fast)) == fast
+    assert speedtest.pick_fastest((dead,)) is None
+    phases = []
+    opts = SpeedTestOptions(server=slow, candidates=(slow, dead, fast), download=False,
+                            upload=False, latency_count=0)
+    r = speedtest.run_test(opts, on_phase=phases.append)
+    assert phases[:2] == ["choose", "connect"]
+    assert r.meta["server_url"] == fast.url

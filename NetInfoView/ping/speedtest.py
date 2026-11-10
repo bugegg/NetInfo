@@ -15,6 +15,7 @@ Qt-free; the window runs ``run_test`` on a worker thread.
 
 from __future__ import annotations
 
+import bisect
 import copy
 import http.client
 import json
@@ -38,14 +39,35 @@ from ..https import ssl_context, urlopen
 DEFAULT_SERVER = "https://speed.cloudflare.com"
 USER_AGENT = "NetInfoView-SpeedTest"
 
-#: Bytes asked for per download request, and sent per upload request; each
-#: stream keeps making requests until the phase's time is up.
-#: Cloudflare answers 429 once an address has pulled a lot in a short while;
-#: a download stream then halves its request size, down to MIN_CHUNK.
-DOWN_CHUNK = 5_000_000
+#: Bytes asked for in a stream's first download request, and sent in its
+#: first upload; each stream keeps making requests until the phase's time is
+#: up. Every later request is sized to last about REQUEST_TARGET_S at the
+#: speed the previous one ran, between MIN_CHUNK and MAX_CHUNK. (A fixed
+#: 5 MB had each stream of a fast line stop for a new request every 0.2 s,
+#: and the graph sawtoothed; Ookla's servers send 25 MB in under a second
+#: to one stream on a 250 Mbps line.) Bytes are counted as they move, so a
+#: first request that can't finish within the phase on a slow line still
+#: measures it.
+DOWN_CHUNK = 100_000_000
+UP_CHUNK = 100_000_000
 MIN_CHUNK = 250_000
-UP_CHUNK = 5_000_000
+MAX_CHUNK = 200_000_000
+#: Cloudflare's /__down answers 403 from 100,000,000 bytes up.
+CLOUDFLARE_MAX_DOWN = 99_999_999
+REQUEST_TARGET_S = 2.5
+#: Statuses that mean "not that much at once": Cloudflare answers 403 to a
+#: download over CLOUDFLARE_MAX_DOWN and 429 once an address has pulled a
+#: lot in a short while; a web server in front of LibreSpeed may answer 413
+#: to a big upload. The stream halves its size and never grows past that again.
+TOO_BIG = (403, 413, 429)
 READ_SIZE = 64 * 1024
+#: The average speed is taken the way Ookla describes its own: the transfer
+#: (after the ramp) is cut into SLICES equal stretches of time, and the
+#: fastest TRIM_FAST and slowest TRIM_SLOW of them are left out, so one
+#: stall or burst doesn't swing the result.
+SLICES = 20
+TRIM_FAST = 0.10
+TRIM_SLOW = 0.20
 SAMPLE_INTERVAL_S = 0.1
 PEAK_WINDOW_S = 1.0
 TIMEOUT_S = 10.0
@@ -124,6 +146,9 @@ class SpeedTestOptions:
     pause_s: float = 1.5
     download: bool = True
     upload: bool = True
+    #: Automatic: try each of these for PROBE_S first and test the fastest
+    #: (`server` is then only the fallback should none of them answer).
+    candidates: tuple[ServerSpec, ...] = ()
 
 
 @dataclass
@@ -180,6 +205,36 @@ def rolling_mbps(points: list[tuple[float, int]], window_s: float = PEAK_WINDOW_
     return mbps(b1 - b0, t1 - t0)
 
 
+def _bytes_at(points: list[tuple[float, int]], t: float) -> float:
+    """Cumulative bytes at time `t`, interpolated between the points."""
+    i = bisect.bisect_left(points, t, key=lambda p: p[0])
+    if i == 0:
+        return points[0][1]
+    if i >= len(points):
+        return points[-1][1]
+    (t0, b0), (t1, b1) = points[i - 1], points[i]
+    return b0 + (b1 - b0) * (t - t0) / (t1 - t0) if t1 > t0 else b1
+
+
+def trimmed_mbps(points: list[tuple[float, int]], slices: int = SLICES) -> float:
+    """Average speed over cumulative (seconds, bytes) points with the
+    fastest TRIM_FAST and slowest TRIM_SLOW of `slices` equal stretches of
+    time left out. Too few points to slice: the plain average."""
+    (t0, b0), (t1, b1) = points[0], points[-1]
+    if t1 <= t0:
+        return 0.0
+    # No finer than the samples themselves, or slices would just echo them.
+    slices = min(slices, len(points) - 1)
+    if slices < 5:
+        return mbps(b1 - b0, t1 - t0)
+    step = (t1 - t0) / slices
+    edges = [_bytes_at(points, t0 + k * step) for k in range(slices + 1)]
+    speeds = sorted(mbps(b - a, step) for a, b in zip(edges, edges[1:]))
+    slow = int(slices * TRIM_SLOW)
+    fast = int(slices * TRIM_FAST)
+    return statistics.fmean(speeds[slow:slices - fast])
+
+
 def summarize(points: list[tuple[float, int]], ramp_s: float) -> TransferResult:
     """Turn cumulative (seconds, bytes) points into a result: per-interval
     speeds (each over the second up to it, as the graph shows them), their
@@ -197,8 +252,7 @@ def summarize(points: list[tuple[float, int]], ramp_s: float) -> TransferResult:
             result.peak_mbps = max(result.peak_mbps, mbps(b1 - b0, t1 - t0))
     steady = [p for p in points if p[0] >= ramp_s]
     if len(steady) >= 2:
-        (t0, b0), (t1, b1) = steady[0], steady[-1]
-        result.mbps = mbps(b1 - b0, t1 - t0)
+        result.mbps = trimmed_mbps(steady)
     elif len(points) >= 2:  # too short to drop the ramp: use it all
         result.mbps = mbps(points[-1][1] - points[0][1], points[-1][0] - points[0][0])
     result.peak_mbps = max(result.peak_mbps, result.mbps)
@@ -219,6 +273,10 @@ class _Server:
         self.path = url.path.rstrip("/")
         self.librespeed = spec.kind == "librespeed"
         self.ookla = spec.kind == "ookla"
+        #: The most one download may ask for, known up front where the
+        #: server is (the rest is found by TOO_BIG halving).
+        self.max_down = (CLOUDFLARE_MAX_DOWN if self.host == "speed.cloudflare.com"
+                         else MAX_CHUNK)
 
     def connect(self) -> http.client.HTTPConnection:
         if self.https:
@@ -420,6 +478,44 @@ def fetch_servers(timeout: float = 8.0) -> list[ServerSpec]:
     return (thai or list(FALLBACK_OOKLA)) + (world or list(FALLBACK_SERVERS))
 
 
+#: How many of the nearest Ookla servers Automatic tries, and for how long
+#: each. Connect time alone picks badly: on a 3BB line the nearest three
+#: answered within 0.5 ms of each other, yet one downloaded at ~150 Mbps
+#: and another at ~430, depending on how each network peers with the ISP.
+AUTO_CANDIDATES = 4
+PROBE_S = 1.0
+PROBE_STREAMS = 4
+
+
+def nearest_ookla(ranked: list[tuple[ServerSpec, float | None]],
+                  count: int = 1) -> list[tuple[ServerSpec, float]]:
+    """The `count` Ookla servers (in Thailand) that answered quickest, with
+    their connect times, nearest first. What Automatic chooses among: a
+    server inside the local ISPs, as speedtest.net picks, measures the line
+    rather than the route out to Cloudflare (which on a 3BB line gave about
+    220 Mbps up where a Bangkok Ookla server gave about 390)."""
+    reachable = [(s, ms) for s, ms in ranked if s.kind == "ookla" and ms is not None]
+    return sorted(reachable, key=lambda item: item[1])[:count]
+
+
+def pick_fastest(specs: tuple[ServerSpec, ...] | list[ServerSpec], seconds: float = PROBE_S,
+                 stop: threading.Event | None = None) -> ServerSpec | None:
+    """Download from each server for `seconds`, one after another, and
+    return the fastest (None if none of them sent anything)."""
+    best, best_mbps = None, 0.0
+    probe = SpeedTestOptions(duration_s=seconds, ramp_s=seconds * 0.3, streams=PROBE_STREAMS)
+    for spec in specs:
+        if stop is not None and stop.is_set():
+            break
+        try:
+            speed = run_transfer(_Server(spec), False, probe, stop=stop).mbps
+        except (OSError, ValueError, http.client.HTTPException):
+            continue
+        if speed > best_mbps:
+            best, best_mbps = spec, speed
+    return best
+
+
 def connect_time_ms(spec: ServerSpec, timeout: float = 2.0, tries: int = 2) -> float | None:
     """How near a server is: the quickest TCP connect to it, in ms (None if
     it can't be reached). A server that fails once isn't asked again, so an
@@ -492,18 +588,29 @@ class _Counter:
             self.value += n
 
 
+def next_chunk(size: int, elapsed_s: float, cap: int) -> int:
+    """The size for a stream's next request: about REQUEST_TARGET_S at the
+    speed the last one (`size` bytes in `elapsed_s`) ran, within MIN_CHUNK
+    and `cap`."""
+    if elapsed_s <= 0:
+        return size
+    return max(MIN_CHUNK, min(cap, int(size / elapsed_s * REQUEST_TARGET_S)))
+
+
 def _download_stream(server: _Server, counter: _Counter, done: threading.Event) -> None:
     conn = None
-    size = DOWN_CHUNK
+    cap = min(MAX_CHUNK, server.max_down)
+    size = min(DOWN_CHUNK, cap)
     while not done.is_set():
         try:
             if conn is None:
                 conn = server.connect()
+            started = time.perf_counter()
             conn.request("GET", server.down(size), headers=_headers())
             resp = conn.getresponse()
-            if resp.status == 429 and size > MIN_CHUNK:
+            if resp.status in TOO_BIG and size > MIN_CHUNK:
                 resp.read()
-                size //= 2  # over the server's quota: ask for less
+                size = cap = max(MIN_CHUNK, size // 2)  # ask for less from now on
                 continue
             if resp.status != 200:
                 resp.read()
@@ -514,7 +621,12 @@ def _download_stream(server: _Server, counter: _Counter, done: threading.Event) 
                     break
                 counter.add(len(data))
             if done.is_set():
+                # Mid-body: reset rather than let the rest of a big
+                # response keep arriving into the next phase.
+                _abort(conn)
+                conn = None
                 break
+            size = next_chunk(size, time.perf_counter() - started, cap)
         except (OSError, http.client.HTTPException) as exc:
             counter.errors.append(str(exc) or type(exc).__name__)
             if conn is not None:
@@ -542,19 +654,21 @@ def _abort(conn: http.client.HTTPConnection) -> None:
 def _upload_stream(server: _Server, counter: _Counter, done: threading.Event) -> None:
     chunk = b"0" * READ_SIZE
     conn = None
+    size, cap = UP_CHUNK, MAX_CHUNK
     while not done.is_set():
         try:
             if conn is None:
                 conn = server.connect()
+            started = time.perf_counter()
             conn.putrequest("POST", server.up(), skip_accept_encoding=True)
             for k, v in _headers().items():
                 conn.putheader(k, v)
             conn.putheader("Content-Type", "application/octet-stream")
-            conn.putheader("Content-Length", str(UP_CHUNK))
+            conn.putheader("Content-Length", str(size))
             conn.endheaders()
             sent = 0
-            while sent < UP_CHUNK and not done.is_set():
-                n = min(READ_SIZE, UP_CHUNK - sent)
+            while sent < size and not done.is_set():
+                n = min(READ_SIZE, size - sent)
                 conn.send(chunk[:n])
                 sent += n
                 counter.add(n)
@@ -566,13 +680,20 @@ def _upload_stream(server: _Server, counter: _Counter, done: threading.Event) ->
                 break
             resp = conn.getresponse()
             resp.read()
+            if resp.status in TOO_BIG and size > MIN_CHUNK:
+                size = cap = max(MIN_CHUNK, size // 2)
+                continue
             if resp.status not in (200, 204):
                 raise OSError(http_error(resp.status))
+            size = next_chunk(size, time.perf_counter() - started, cap)
         except (OSError, http.client.HTTPException) as exc:
             counter.errors.append(str(exc) or type(exc).__name__)
             if conn is not None:
                 conn.close()
             conn = None
+            # A server that cuts off a body too big for it shows up here
+            # rather than as a 413: try a smaller one (it may grow again).
+            size = max(MIN_CHUNK, size // 2)
             if done.wait(0.5):
                 break
     if conn is not None:
@@ -649,14 +770,21 @@ def run_test(options: SpeedTestOptions,
              on_progress: Callable[[SpeedResult], None] | None = None) -> SpeedResult:
     """As nPerf runs it: connect, download, a pause, upload, a pause, then
     ping (latency and jitter, on the line the transfers have left quiet).
-    ``on_phase`` gets "connect", "download", "pause", "upload", "ping";
+    ``on_phase`` gets "choose" (Automatic trying its candidates), "connect",
+    "download", "pause", "upload", "ping";
     ``on_sample`` gets (phase, seconds, value): Mbps for the transfers, the
     round trip in ms for each ping; ``on_progress`` gets the result so far
     after each phase."""
     result = SpeedResult()
     stopped = lambda: stop is not None and stop.is_set()  # noqa: E731
     try:
-        server = _Server(options.server)
+        spec = options.server
+        if options.candidates:
+            if on_phase:
+                on_phase("choose")
+            spec = pick_fastest(options.candidates, stop=stop) or spec
+        result.meta["server_url"] = spec.url if isinstance(spec, ServerSpec) else spec
+        server = _Server(spec)
         if on_phase:
             on_phase("connect")
         measure_latency(server, 0, result.meta, stop)  # reachable? and who answers
