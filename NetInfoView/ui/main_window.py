@@ -40,7 +40,7 @@ from ..model.history import HistoryFilterProxy, HistoryModel, HistoryRecord
 from ..model.host import HostEntry
 from ..model.samples import SampleStore
 from ..model.table_model import HostFilterProxy, HostTableModel
-from ..ping import mtu, port_scan, snmp, snmp_arp
+from ..ping import mtu, port_scan, snmp, snmp_arp, vendor_update
 from ..ping.device_info import DeviceInfoJob
 from ..ping.engine import EngineOptions
 from ..ping.icmp import _IP_DONTFRAG
@@ -81,6 +81,9 @@ DEVICE_INFO_MAX_ATTEMPTS = DEVICE_INFO_MAX_RETRIES + 1
 #: Wait this long after launch before the automatic update check, so it
 #: never competes with the window opening and the first pings.
 UPDATE_CHECK_DELAY_MS = 3000
+#: The monthly MAC vendor database check waits longer still: it's the least
+#: urgent thing at launch.
+VENDOR_CHECK_DELAY_MS = 15000
 
 
 class MainWindow(QMainWindow):
@@ -171,6 +174,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(
                 UPDATE_CHECK_DELAY_MS, lambda: self.check_for_updates(silent=True)
             )
+            QTimer.singleShot(VENDOR_CHECK_DELAY_MS, self._auto_update_vendor_database)
 
     # -- construction ------------------------------------------------------
 
@@ -1290,13 +1294,22 @@ class MainWindow(QMainWindow):
             self._engine.update_options(self._engine_options())
 
     def update_vendor_database(self) -> None:
-        """Download the IEEE OUI registry and replace the local vendor table."""
+        """Download the IEEE registries and replace the local vendor table."""
         if self._vendor_update_thread is not None:
             return
-        self.action_update_vendor_db.setEnabled(False)
         self.statusBar().showMessage("Downloading the IEEE MAC vendor registry...")
+        self._start_vendor_update(auto=False)
 
-        thread = VendorUpdateThread(self._vendor_db)
+    def _auto_update_vendor_database(self) -> None:
+        """Once a month, quietly fetch a newer vendor database if one has
+        been published; only a found update is mentioned, and only in the
+        status bar."""
+        if self._vendor_update_thread is None and vendor_update.auto_check_due(self._vendor_db):
+            self._start_vendor_update(auto=True)
+
+    def _start_vendor_update(self, auto: bool) -> None:
+        self.action_update_vendor_db.setEnabled(False)
+        thread = VendorUpdateThread(self._vendor_db, auto=auto)
         thread.succeeded.connect(self._on_vendor_update_succeeded)
         thread.failed.connect(self._on_vendor_update_failed)
         thread.finished.connect(self._on_vendor_update_finished)
@@ -1304,6 +1317,11 @@ class MainWindow(QMainWindow):
         thread.start()
 
     def _on_vendor_update_succeeded(self, count: int) -> None:
+        if not count:  # nothing newer than what's here
+            thread = self._vendor_update_thread
+            if thread is not None and not thread.auto:
+                self.statusBar().showMessage("MAC vendor database is already up to date.", 6000)
+            return
         self.statusBar().showMessage(
             f"MAC vendor database updated: {count:,} entries.", 6000
         )
@@ -1316,6 +1334,9 @@ class MainWindow(QMainWindow):
                     self._model.refresh_row_for_key(entry.key)
 
     def _on_vendor_update_failed(self, message: str) -> None:
+        thread = self._vendor_update_thread
+        if thread is not None and thread.auto:
+            return  # offline, say: tried again at the next launch
         QMessageBox.warning(self, "Update MAC Vendor Database", message)
         self._update_status_bar()
 

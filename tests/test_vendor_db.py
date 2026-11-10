@@ -159,3 +159,42 @@ def test_seed_from_without_a_bundled_copy_does_nothing(tmp_path):
         assert db.entry_count() == 0
     finally:
         db.close()
+
+
+def test_lookup_prefers_the_longest_matching_prefix(db):
+    db.replace_all(
+        [("70B3D5", "IEEE Registration Authority"),
+         ("70B3D51", "Mid Block Co"),
+         ("70B3D5123", "Tiny Sensor Ltd")],
+        updated_at="now",
+    )
+    assert db.lookup("70:B3:D5:12:34:56") == "Tiny Sensor Ltd"  # MA-S
+    assert db.lookup("70:B3:D5:1F:00:00") == "Mid Block Co"  # MA-M
+    assert db.lookup("70:B3:D5:F0:00:00") == "IEEE Registration Authority"  # MA-L
+    assert db.entry_count() == 3
+
+
+def test_seed_from_replaces_an_older_local_copy(tmp_path):
+    bundled = _bundled(tmp_path, [("E8136E", "Bundled Name")])  # 2026-11-09
+    db = VendorDB(tmp_path / "local.sqlite")
+    try:
+        db.replace_all([("E8136E", "Old Name"), ("AAAAAA", "Gone")],
+                       updated_at="2026-01-01 00:00:00")
+        assert db.seed_from(bundled) == 1
+        assert db.lookup("E8136E") == "Bundled Name"
+        assert db.lookup("AAAAAA") == ""
+        assert db.last_updated() == "2026-11-09 00:00:00"
+        assert db.seed_from(bundled) == 0  # now as new as it
+    finally:
+        db.close()
+
+
+def test_import_from_keeps_the_table_when_the_other_is_too_small(tmp_path):
+    other = _bundled(tmp_path, [("E8136E", "Only One")])
+    db = VendorDB(tmp_path / "local.sqlite")
+    try:
+        db.replace_all([("CCF411", "Kept")], updated_at="t1")
+        assert db.import_from(other, min_entries=2) == 0
+        assert db.lookup("CCF411") == "Kept"
+    finally:
+        db.close()

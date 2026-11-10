@@ -1,11 +1,15 @@
 """Local, persistent MAC-vendor (IEEE OUI) lookup.
 
-A release build bundles a copy of the IEEE registry taken on the day it was
-built (packaging/make_vendor_db.py), and an empty local database is seeded
-from it at launch (VendorDB.seed_from), so vendor names show up on a fresh
-install without going online. Options > Update MAC Vendor Database fetches
-the current registry, and is the only way to get one when there's no bundled
-copy (running from source, or the build couldn't reach IEEE).
+Holds all three IEEE MAC registries: MA-L (24-bit prefixes, 6 hex digits),
+MA-M (28-bit, 7) and MA-S (36-bit, 9). A MAC is looked up by its longest
+matching prefix, so a camera from a small maker whose block was carved out
+of an MA-L one reads as that maker, not "IEEE Registration Authority".
+
+A release build bundles a copy taken on the day it was built
+(packaging/make_vendor_db.py); at launch it replaces the local database
+when it is newer (VendorDB.seed_from), so updating the app updates the
+vendor names too. Between releases ping/vendor_update.py fetches a fresh
+copy: by itself once a month, or from Update MAC Vendor Database.
 """
 
 from __future__ import annotations
@@ -91,6 +95,17 @@ def normalise_prefix(mac: str) -> str:
     return hex_digits[:6].upper() if len(hex_digits) >= 6 else ""
 
 
+#: Hex digits in an MA-S, MA-M and MA-L assignment, longest first.
+PREFIX_LENGTHS = (9, 7, 6)
+
+
+def normalise_assignment(prefix: str) -> str:
+    """An IEEE assignment as bare uppercase hex: 6, 7 or 9 digits for
+    MA-L, MA-M or MA-S. "" for anything else."""
+    hex_digits = "".join(ch for ch in prefix if ch in "0123456789abcdefABCDEF").upper()
+    return hex_digits if len(hex_digits) in PREFIX_LENGTHS else ""
+
+
 class VendorDB:
     """One SQLite-backed table mapping an OUI prefix to a vendor name.
 
@@ -117,12 +132,15 @@ class VendorDB:
 
     def lookup(self, mac: str) -> str:
         """The vendor for ``mac``'s OUI prefix, or "" if unknown/not downloaded yet."""
-        prefix = normalise_prefix(mac)
-        if not prefix:
+        hex_digits = "".join(ch for ch in mac if ch in "0123456789abcdefABCDEF").upper()
+        prefixes = [hex_digits[:n] for n in PREFIX_LENGTHS if len(hex_digits) >= n]
+        if not prefixes:
             return ""
         with self._lock:
             row = self._conn.execute(
-                "SELECT vendor FROM oui WHERE prefix = ?", (prefix,)
+                "SELECT vendor FROM oui WHERE prefix IN (%s)"
+                " ORDER BY length(prefix) DESC LIMIT 1" % ",".join("?" * len(prefixes)),
+                prefixes,
             ).fetchone()
         return row[0] if row else ""
 
@@ -139,32 +157,69 @@ class VendorDB:
 
     # -- writes ----------------------------------------------------------
 
-    def seed_from(self, bundled: Path | None = None) -> int:
-        """Fill an empty table from the database bundled with the app.
+    def get_meta(self, key: str) -> str | None:
+        with self._lock:
+            row = self._conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
 
-        Returns the number of entries copied: 0 if this one already has
-        entries or there's no usable bundled copy. Never raises; worst case
-        the registry is downloaded instead.
+    def set_meta(self, key: str, value: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value)
+            )
+
+    def seed_from(self, bundled: Path | None = None) -> int:
+        """Take the database bundled with the app when this one is empty or
+        older than it (the app was just updated, say).
+
+        Returns the number of entries copied: 0 if this one is at least as
+        new or there's no usable bundled copy. Never raises; worst case the
+        registry is downloaded instead.
         """
         bundled = bundled or bundled_db_path()
-        if not bundled.is_file() or self.entry_count():
+        if not bundled.is_file():
             return 0
         try:
-            with self._lock:
-                self._conn.execute("ATTACH DATABASE ? AS bundled", (str(bundled),))
-                try:
-                    with self._conn:
-                        self._conn.execute(
-                            "INSERT OR REPLACE INTO oui SELECT prefix, vendor FROM bundled.oui"
-                        )
-                        self._conn.execute(
-                            "INSERT OR REPLACE INTO meta SELECT key, value FROM bundled.meta"
-                            " WHERE key = 'last_updated'"
-                        )
-                finally:
-                    self._conn.execute("DETACH DATABASE bundled")
+            return self.import_from(bundled, only_if_newer=bool(self.entry_count()))
         except sqlite3.Error:
             return 0
+
+    def import_from(self, path: Path, only_if_newer: bool = False, min_entries: int = 1) -> int:
+        """Replace the table with the one in another vendor database file
+        (the bundled copy, or one downloaded from GitHub), in one transaction.
+
+        Returns the number of entries now held, or 0 if nothing changed:
+        `only_if_newer` and that file isn't newer, or it holds fewer than
+        `min_entries` (a broken download must not wipe a good table).
+        Raises sqlite3.Error if the file isn't a vendor database.
+        """
+        with self._lock:
+            self._conn.execute("ATTACH DATABASE ? AS other", (str(path),))
+            try:
+                row = self._conn.execute(
+                    "SELECT value FROM other.meta WHERE key = 'last_updated'"
+                ).fetchone()
+                theirs = row[0] if row else ""
+                if only_if_newer:
+                    row = self._conn.execute(
+                        "SELECT value FROM meta WHERE key = 'last_updated'"
+                    ).fetchone()
+                    if not theirs or (row and row[0] >= theirs):
+                        return 0
+                count = self._conn.execute("SELECT COUNT(*) FROM other.oui").fetchone()[0]
+                if count < max(1, min_entries):
+                    return 0
+                with self._conn:
+                    self._conn.execute("DELETE FROM oui")
+                    self._conn.execute(
+                        "INSERT OR REPLACE INTO oui SELECT prefix, vendor FROM other.oui"
+                    )
+                    self._conn.execute(
+                        "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_updated', ?)",
+                        (theirs,),
+                    )
+            finally:
+                self._conn.execute("DETACH DATABASE other")
         return self.entry_count()
 
     def replace_all(self, rows: Iterable[tuple[str, str]], updated_at: str) -> int:
@@ -175,7 +230,7 @@ class VendorDB:
         line abort an otherwise-good import.
         """
         clean = [
-            (normalise_prefix(prefix), vendor.strip())
+            (normalise_assignment(prefix), vendor.strip())
             for prefix, vendor in rows
             if vendor and vendor.strip()
         ]

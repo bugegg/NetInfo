@@ -1,0 +1,51 @@
+# Rebuilds the MAC vendor database from the IEEE registries once a month and
+# publishes it on the "oui-db" release, where installed copies of the app
+# look for it (NetInfoView/ping/vendor_update.py):
+#
+#   https://github.com/<repo>/releases/download/oui-db/vendor-db.json
+#   https://github.com/<repo>/releases/download/oui-db/vendor.sqlite.gz
+#
+# The release is a prerelease, so it never shows up as "latest" to the app's
+# own update check (which reads /releases/latest). Its tag doesn't start
+# with "v", so release.yml's "v*" tags never build it. Run it by hand from the
+# Actions tab to publish the first copy.
+name: MAC vendor database
+
+on:
+  schedule:
+    - cron: "17 3 1 * *"  # 03:17 UTC on the 1st of each month
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Build
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements-lock.txt
+          .venv/bin/python packaging/make_vendor_db.py --publish out/vendor.sqlite
+          cat out/vendor-db.json
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view oui-db --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create oui-db --repo "$GITHUB_REPOSITORY" \
+              --title "MAC vendor database" --prerelease --latest=false \
+              --notes "IEEE MA-L, MA-M and MA-S registries, rebuilt monthly for NetInfoView to download. Not an app release."
+          fi
+          # A copy checking in between the two uploads sees a checksum
+          # mismatch, keeps what it has and tries again at its next launch.
+          gh release upload oui-db out/vendor.sqlite.gz --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload oui-db out/vendor-db.json --clobber --repo "$GITHUB_REPOSITORY"

@@ -73,7 +73,7 @@ Pininfoview/
 │   │   ├── lldp_cdp.py         LLDP/CDP frames heard on the Mac's ports via BPF
 │   │   ├── dns_ptr.py          PTR lookup against the system's DNS servers
 │   │   ├── network_interfaces.py  active IPv4 interfaces from `ifconfig`
-│   │   └── vendor_update.py    IEEE OUI CSV fetch and parse
+│   │   └── vendor_update.py    vendor DB fetch: GitHub copy or IEEE MA-L/MA-M/MA-S CSVs
 │   ├── model/                  data model
 │   │   ├── host.py             HostEntry (one grid row + statistics)
 │   │   ├── columns.py          the single column table
@@ -82,7 +82,7 @@ Pininfoview/
 │   ├── fileio/
 │   │   ├── hostfile.py         host-list parse/format
 │   │   ├── export.py           7 export formats
-│   │   └── vendor_db.py        SQLite OUI database
+│   │   └── vendor_db.py        SQLite OUI database, longest-prefix lookup
 │   └── ui/
 │       ├── main_window.py      main window, actions, timers
 │       ├── engine_thread.py    QThread hosting the asyncio engine
@@ -107,7 +107,7 @@ in `model/` and `ui/`.
 | GUI thread | `MainWindow` | Models, views, dialogs, timers |
 | Engine thread | `EngineThread` (QThread running `asyncio.run`) | `PingEngine` loop; all ICMP/TCP pings |
 | Device-info thread | `DeviceInfoThread` (one per sweep) | `device_info.resolve_batch` with internal thread pools |
-| Vendor-update thread | `VendorUpdateThread` (one per update) | Download and import the IEEE OUI registry |
+| Vendor-update thread | `VendorUpdateThread` (one per update) | Download and import the vendor database (monthly auto check, or the menu item) |
 
 Cross-thread communication:
 
