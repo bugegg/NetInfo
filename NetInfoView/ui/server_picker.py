@@ -119,6 +119,8 @@ class ServerRow(QFrame):
         return self.lines[0] if self.lines else self.title
 
     def set_selected(self, selected: bool) -> None:
+        if selected == self.checked and self.property("selected") == selected:
+            return  # re-polishing every row on each click is what made it stutter
         self.checked = selected
         self.check.setPixmap(glyphs.pixmap("check", BLUE, 22) if selected else QPixmap())
         self.setProperty("selected", selected)
@@ -129,6 +131,22 @@ class ServerRow(QFrame):
         if self.isEnabled() and event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
         super().mousePressEvent(event)
+
+
+class PanelShadow(QFrame):
+    """The panel's shadow, drawn by a plain sibling behind it. On the panel
+    itself a QGraphicsDropShadowEffect re-renders and re-blurs the whole
+    panel on every hover, scroll and click, which stutters on Windows."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setObjectName("pickerShadow")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        effect = QGraphicsDropShadowEffect(self)
+        effect.setBlurRadius(40)
+        effect.setOffset(-4, 0)
+        effect.setColor(QColor(0, 0, 0, 70))
+        self.setGraphicsEffect(effect)
 
 
 class Scrim(QFrame):
@@ -160,7 +178,13 @@ class ServerPicker(QFrame):
         self._loaded = False
         self._selected: Choice = CLOUDFLARE
         self._region = "All"
+        #: The rows on show (filtered), and every server's row, built once
+        #: per server list and only shown or hidden by search and region.
         self._rows: list[ServerRow] = []
+        self._all_rows: list[tuple[ServerRow, Location]] = []
+        self._custom: ServerRow | None = None
+        self._empty: QLabel | None = None
+        self._dirty = True
 
         # Dims the rest of the window; a click there closes the panel.
         self.scrim = Scrim(window)
@@ -168,11 +192,8 @@ class ServerPicker(QFrame):
         self.scrim.hide()
         self.scrim.clicked.connect(self.close_panel)
 
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(40)
-        shadow.setOffset(-4, 0)
-        shadow.setColor(QColor(0, 0, 0, 70))
-        self.setGraphicsEffect(shadow)
+        self.shadow = PanelShadow(window)
+        self.shadow.hide()
 
         title = QLabel("Select server")
         title.setObjectName("pickerTitle")
@@ -196,7 +217,7 @@ class ServerPicker(QFrame):
         self.search.setObjectName("pickerSearch")
         self.search.setPlaceholderText("Search country, city or provider — or type a server URL")
         self.search.setClearButtonEnabled(True)
-        self.search.textChanged.connect(self._rebuild)
+        self.search.textChanged.connect(self._filter)
         self._search_action = None
 
         self.chips = QHBoxLayout()
@@ -268,6 +289,7 @@ class ServerPicker(QFrame):
         self._animation = QPropertyAnimation(self, b"pos", self)
         self._animation.setDuration(SLIDE_MS)
         self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._animation.valueChanged.connect(self._follow_shadow)
         self.hide()
         self.apply_theme()
         self._rebuild_chips()
@@ -284,7 +306,11 @@ class ServerPicker(QFrame):
         self._search_action = self.search.addAction(
             glyphs.icon("search", muted, 16), QLineEdit.ActionPosition.LeadingPosition)
         if self.automatic is not None:
-            self._rebuild()
+            self._rebuild_auto()
+            if self.isVisible():
+                self._rebuild()
+            else:
+                self._dirty = True
 
     # --------------------------------------------------------------- data
 
@@ -294,19 +320,24 @@ class ServerPicker(QFrame):
         self._ranked = list(ranked)
         self._loaded = True
         self._rebuild_chips()
-        self._rebuild()
+        if self.isVisible():
+            self._rebuild()
+        else:
+            self._dirty = True  # built when the panel next opens
 
     def set_nearest(self, nearest: tuple[ServerSpec, float] | None) -> None:
         if sip.isdeleted(self) or sip.isdeleted(self.list_layout):
             return
         self.nearest = nearest
-        self._rebuild()
+        self._rebuild_auto()
+        self._sync_selection()
 
     def set_cloudflare_latency(self, ms: float | None) -> None:
         if sip.isdeleted(self) or sip.isdeleted(self.list_layout):
             return  # the window went while the timing was on its way
         self._cloudflare_ms = ms
-        self._rebuild()
+        self._rebuild_auto()
+        self._sync_selection()
 
     def _badge(self, name: str = "", icon: str = "", color: str = BLUE,
                domain: str = "") -> ProviderBadge:
@@ -355,9 +386,14 @@ class ServerPicker(QFrame):
 
     def _set_region(self, region: str) -> None:
         self._region = region
-        self._rebuild()
+        self._filter()
 
     def _rebuild(self) -> None:
+        theme = getattr(self._window, "theme", {}) or {}
+        self._rebuild_auto()
+        self._build_rows(theme)
+
+    def _rebuild_auto(self) -> None:
         theme = getattr(self._window, "theme", {}) or {}
         if self.automatic is not None:
             self._auto_slot.removeWidget(self.automatic)
@@ -376,48 +412,74 @@ class ServerPicker(QFrame):
         self.automatic.clicked.connect(lambda: self._select(CLOUDFLARE))
         self._auto_slot.addWidget(self.automatic)
 
+    def _build_rows(self, theme: dict) -> None:
+        self._dirty = False
         self._rows = []
+        self._all_rows = []
+        self._custom = None
         while self.list_layout.count():
             item = self.list_layout.takeAt(0)
             if item.widget():
                 # Hidden at once: deleteLater leaves it painted until the next loop.
                 item.widget().hide()
                 item.widget().deleteLater()
-        query = self.search.text()
-        if is_url(query):
-            url = query.strip()
-            self._add_row(ServerRow(url, self._badge(icon="link", color="#8b5cf6"),
-                                    "Custom server", [url], show_latency=False, theme=theme))
-        shown = 0
         for spec, ms in self._ranked:
             where = locate(spec)
-            if self._region != "All" and self._region not in (where.region, where.country):
-                continue
-            if not is_url(query) and not where.matches(query):
-                continue
             domain = logos.domain_for(where.sponsor, spec.sponsor_url, spec.url)
             row = ServerRow(spec, self._badge(where.sponsor or where.country, domain=domain),
                             where.title,
                             [where.place, where.sponsor], iso=where.iso, ms=ms,
                             enabled=ms is not None, theme=theme)
-            self._add_row(row)
-            shown += 1
-        if not shown and not is_url(query):
-            text = ("Finding servers worldwide…" if not self._loaded
-                    else "No servers match." if query or self._region != "All"
-                    else "Couldn't load the server list.")
-            empty = QLabel(text)
-            empty.setObjectName("pickerNote")
-            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty.setMinimumHeight(60)
-            self.list_layout.addWidget(empty)
+            row.clicked.connect(lambda r=row: self._select(r.choice))
+            self._all_rows.append((row, where))
+            self.list_layout.addWidget(row)
+        self._empty = QLabel()
+        self._empty.setObjectName("pickerNote")
+        self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty.setMinimumHeight(60)
+        self.list_layout.addWidget(self._empty)
         self.list_layout.addStretch(1)
-        self._sync_selection()
+        self._filter()
 
-    def _add_row(self, row: ServerRow) -> None:
-        row.clicked.connect(lambda r=row: self._select(r.choice))
-        self._rows.append(row)
-        self.list_layout.addWidget(row)
+    def _filter(self) -> None:
+        """Show the rows that match the search and region; hide the rest."""
+        if self._empty is None or sip.isdeleted(self._empty):
+            return
+        theme = getattr(self._window, "theme", {}) or {}
+        query = self.search.text()
+        url = query.strip() if is_url(query) else ""
+        if url and (self._custom is None or self._custom.choice != url):
+            if self._custom is not None:
+                self.list_layout.removeWidget(self._custom)
+                self._custom.hide()
+                self._custom.deleteLater()
+            self._custom = ServerRow(url, self._badge(icon="link", color="#8b5cf6"),
+                                     "Custom server", [url], show_latency=False, theme=theme)
+            self._custom.clicked.connect(lambda r=self._custom: self._select(r.choice))
+            self.list_layout.insertWidget(0, self._custom)
+        elif not url and self._custom is not None:
+            self.list_layout.removeWidget(self._custom)
+            self._custom.hide()
+            self._custom.deleteLater()
+            self._custom = None
+        self._rows = [self._custom] if self._custom is not None else []
+        self.list.setUpdatesEnabled(False)
+        for row, where in self._all_rows:
+            show = ((self._region == "All" or self._region in (where.region, where.country))
+                    and (bool(url) or where.matches(query)))
+            row.setVisible(show)
+            if show:
+                self._rows.append(row)
+        shown = len(self._rows) - (self._custom is not None)
+        if not shown and not url:
+            self._empty.setText("Finding servers worldwide…" if not self._loaded
+                                else "No servers match." if query or self._region != "All"
+                                else "Couldn't load the server list.")
+            self._empty.show()
+        else:
+            self._empty.hide()
+        self.list.setUpdatesEnabled(True)
+        self._sync_selection()
 
     # ---------------------------------------------------------- selection
 
@@ -462,13 +524,21 @@ class ServerPicker(QFrame):
 
     def open_panel(self, current: Choice) -> None:
         self._selected = current
+        self.search.blockSignals(True)
         self.search.clear()
-        self._rebuild()
+        self.search.blockSignals(False)
+        if self._dirty:
+            self._rebuild()
+        else:
+            self._filter()
         shown, hidden = self._geometry()
         self.scrim.setGeometry(self._window.rect())
         self.scrim.show()
         self.scrim.raise_()
+        self.shadow.show()
+        self.shadow.raise_()
         self.move(hidden)
+        self._follow_shadow(hidden)
         self.show()
         self.raise_()
         self._animation.stop()
@@ -481,7 +551,11 @@ class ServerPicker(QFrame):
         if not self.isVisible():
             return
         self.hide()
+        self.shadow.hide()
         self.scrim.hide()
+
+    def _follow_shadow(self, pos) -> None:
+        self.shadow.setGeometry(pos.x(), pos.y(), self.width(), self.height())
 
     def is_open(self) -> bool:
         return self.isVisible()
@@ -492,6 +566,7 @@ class ServerPicker(QFrame):
             self._animation.stop()
             shown, _ = self._geometry()
             self.move(shown)
+            self._follow_shadow(shown)
             self.scrim.setGeometry(self._window.rect())
 
     def keyPressEvent(self, event) -> None:
