@@ -1489,6 +1489,8 @@ class SpeedTestWindow(QWidget):
             QFrame#scrim {{ background: rgba(15, 23, 42, 70); }}
             QFrame#picker {{ background: {c['panel']}; border-left: 1px solid {c['border']};
                              border-top-left-radius: 16px; border-bottom-left-radius: 16px; }}
+            QFrame#pickerShadow {{ background: {c['panel']};
+                             border-top-left-radius: 16px; border-bottom-left-radius: 16px; }}
             QLabel#pickerTitle {{ font-size: 22px; font-weight: 700; }}
             QLabel#pickerSubtitle, QLabel#pickerNote {{ color: {c['muted']}; font-size: 12px; }}
             QPushButton#pickerClose {{ background: transparent; border: none; padding: 0;
