@@ -35,6 +35,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from ..https import ssl_context, urlopen
+from . import send_queue
 
 DEFAULT_SERVER = "https://speed.cloudflare.com"
 USER_AGENT = "NetInfoView-SpeedTest"
@@ -243,14 +244,17 @@ def summarize(points: list[tuple[float, int]], ramp_s: float) -> TransferResult:
     for i in range(1, len(points)):
         result.samples.append((points[i][0], rolling_mbps(points[:i + 1])))
     # Peak over a rolling second: a single 100 ms sample swings with bursts.
+    # After the ramp, like the average: the first moments are the
+    # connections opening and buffers filling, not the line.
+    steady = [p for p in points if p[0] >= ramp_s]
+    peak_points = steady if len(steady) >= 2 else points
     j = 0
-    for t1, b1 in points:
-        while j + 1 < len(points) and t1 - points[j + 1][0] >= PEAK_WINDOW_S:
+    for t1, b1 in peak_points:
+        while j + 1 < len(peak_points) and t1 - peak_points[j + 1][0] >= PEAK_WINDOW_S:
             j += 1
-        t0, b0 = points[j]
+        t0, b0 = peak_points[j]
         if t1 - t0 >= PEAK_WINDOW_S:
             result.peak_mbps = max(result.peak_mbps, mbps(b1 - b0, t1 - t0))
-    steady = [p for p in points if p[0] >= ramp_s]
     if len(steady) >= 2:
         result.mbps = trimmed_mbps(steady)
     elif len(points) >= 2:  # too short to drop the ramp: use it all
@@ -578,14 +582,63 @@ def rank_servers(
 
 
 class _Counter:
+    """Bytes moved so far. Downloads add what they read. Uploads count what
+    the server has acknowledged: what was written to each connection less
+    what its send buffer still holds (send_queue), since a fresh buffer
+    takes megabytes at once and the first second would read far too fast."""
+
     def __init__(self) -> None:
-        self.value = 0
+        self._bytes = 0
         self.lock = threading.Lock()
         self.errors: list[str] = []
+        #: Per upload stream: [socket, bytes written on it, bytes known to
+        #: have arrived (all of them once a response came back)].
+        self._uploads: dict[int, list] = {}
 
     def add(self, n: int) -> None:
         with self.lock:
-            self.value += n
+            self._bytes += n
+
+    @staticmethod
+    def _arrived(entry: list) -> int:
+        sock, written, settled = entry
+        waiting = send_queue.queued(sock, written)
+        if waiting is None:
+            return written  # can't tell: count it as sent, as before
+        return max(settled, written - min(max(waiting, 0), written))
+
+    @property
+    def value(self) -> int:
+        with self.lock:
+            return self._bytes + sum(self._arrived(e) for e in self._uploads.values())
+
+    def upload_on(self, key: int, sock) -> None:
+        """Stream `key` is sending on `sock` (a new connection or the same)."""
+        with self.lock:
+            entry = self._uploads.get(key)
+            if entry is not None and entry[0] is sock:
+                return
+            if entry is not None:
+                self._bytes += self._arrived(entry)
+            self._uploads[key] = [sock, 0, 0]
+
+    def wrote(self, key: int, n: int) -> None:
+        with self.lock:
+            self._uploads[key][1] += n
+
+    def settle(self, key: int) -> None:
+        """The server answered: everything written so far has arrived."""
+        with self.lock:
+            entry = self._uploads.get(key)
+            if entry is not None:
+                entry[2] = entry[1]
+
+    def upload_closing(self, key: int) -> None:
+        """Called before the stream's socket closes, while it can still be asked."""
+        with self.lock:
+            entry = self._uploads.pop(key, None)
+            if entry is not None:
+                self._bytes += self._arrived(entry)
 
 
 def next_chunk(size: int, elapsed_s: float, cap: int) -> int:
@@ -653,6 +706,7 @@ def _abort(conn: http.client.HTTPConnection) -> None:
 
 def _upload_stream(server: _Server, counter: _Counter, done: threading.Event) -> None:
     chunk = b"0" * READ_SIZE
+    key = threading.get_ident()
     conn = None
     size, cap = UP_CHUNK, MAX_CHUNK
     while not done.is_set():
@@ -666,20 +720,23 @@ def _upload_stream(server: _Server, counter: _Counter, done: threading.Event) ->
             conn.putheader("Content-Type", "application/octet-stream")
             conn.putheader("Content-Length", str(size))
             conn.endheaders()
+            counter.upload_on(key, conn.sock)
             sent = 0
             while sent < size and not done.is_set():
                 n = min(READ_SIZE, size - sent)
                 conn.send(chunk[:n])
                 sent += n
-                counter.add(n)
+                counter.wrote(key, n)
             if done.is_set():
                 # Mid-body: drop what the kernel still holds to send, or it
                 # goes on uploading after the phase and slows the ping after.
+                counter.upload_closing(key)
                 _abort(conn)
                 conn = None
                 break
             resp = conn.getresponse()
             resp.read()
+            counter.settle(key)
             if resp.status in TOO_BIG and size > MIN_CHUNK:
                 size = cap = max(MIN_CHUNK, size // 2)
                 continue
@@ -688,6 +745,7 @@ def _upload_stream(server: _Server, counter: _Counter, done: threading.Event) ->
             size = next_chunk(size, time.perf_counter() - started, cap)
         except (OSError, http.client.HTTPException) as exc:
             counter.errors.append(str(exc) or type(exc).__name__)
+            counter.upload_closing(key)
             if conn is not None:
                 conn.close()
             conn = None
@@ -696,6 +754,7 @@ def _upload_stream(server: _Server, counter: _Counter, done: threading.Event) ->
             size = max(MIN_CHUNK, size // 2)
             if done.wait(0.5):
                 break
+    counter.upload_closing(key)
     if conn is not None:
         conn.close()
 
