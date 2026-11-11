@@ -801,7 +801,6 @@ class SpeedTestWindow(QWidget):
         #: What Automatic (the CLOUDFLARE choice) chooses among: the nearest
         #: few Ookla servers once the list is timed (speedtest.nearest_ookla).
         self._candidates: tuple[ServerSpec, ...] = ()
-        self._pending_url = ""
         #: Providers' logos, from their websites (ping/logos.py).
         self.logos = LogoStore(self)
         self.server = ServerField()
@@ -1005,6 +1004,11 @@ class SpeedTestWindow(QWidget):
         self._choice = choice
         self.server.show_choice(choice, colo)
         if self._result is None:
+            if same_choice(choice, CLOUDFLARE) and self._candidates:
+                # Automatic runs on Cloudflare only when there's nothing nearby.
+                self.server_label.setText(
+                    f"Next test: the fastest of {len(self._candidates)} nearby servers")
+                return
             url = choice.url if isinstance(choice, ServerSpec) else choice
             host = urllib.parse.urlsplit(url).hostname or url
             self.server_label.setText(f"Next test: {host}")
@@ -1020,24 +1024,13 @@ class SpeedTestWindow(QWidget):
         index = self.duration.findData(float(settings.speed_test_seconds))
         if index >= 0:
             self.duration.setCurrentIndex(index)
-        saved = settings.speed_test_server
-        if not saved or saved == CLOUDFLARE.url:
-            return
-        known = next((s for s in speedtest.FALLBACK_SERVERS if s.url == saved), None)
-        if known is not None:
-            self.set_choice(known)
-        else:
-            # A server from the list, found once it arrives; or a custom URL.
-            self._pending_url = saved
-            self.set_choice(saved)
+        # The server isn't restored: every window starts on Automatic (the
+        # fastest nearby), and a server picked by hand lasts while it's open.
 
     def _remember_choice(self, options: SpeedTestOptions) -> None:
         settings = self._settings()
         if settings is None:
             return
-        # The choice, not the server Automatic resolved to this time.
-        server = self._choice
-        settings.speed_test_server = server.url if isinstance(server, ServerSpec) else server
         settings.speed_test_seconds = options.duration_s
 
     def find_provider(self) -> None:
@@ -1385,10 +1378,6 @@ class SpeedTestWindow(QWidget):
         self._list_thread = None
         self.picker.set_servers(ranked)
         self._set_nearest(ranked)
-        wanted, self._pending_url = self._pending_url, ""
-        spec = next((s for s, _ in ranked if wanted and s.url == wanted), None)
-        if spec is not None and self._choice == wanted:
-            self.set_choice(spec)
 
     # ------------------------------------------------------------- theme
 
