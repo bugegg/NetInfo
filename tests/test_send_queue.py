@@ -7,9 +7,14 @@ from NetInfoView.ping.speedtest import _Counter, summarize
 
 def _pair():
     listener = socket.socket()
+    # Fixed buffers: with autotuning the peer's receive buffer can grow
+    # and take everything a moment later, so nothing would be left queued.
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
-    client = socket.create_connection(listener.getsockname())
+    client = socket.socket()
+    client.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 256 * 1024)
+    client.connect(listener.getsockname())
     server, _ = listener.accept()
     listener.close()
     return client, server
