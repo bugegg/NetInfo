@@ -8,6 +8,7 @@ from NetInfoView.ping.device_link import DeviceLink
 from NetInfoView.ping.provider import Provider
 from NetInfoView.ping.speed_locations import locate
 from NetInfoView.ping.speedtest import SpeedResult, TransferResult
+from NetInfoView.ui.server_picker import same_choice
 from NetInfoView.ui.speedtest_window import (
     Gauge, SpeedTestWindow, format_mbps, result_text, server_text,
 )
@@ -260,17 +261,19 @@ def test_choosing_a_server_in_the_picker(qapp):
     w.close()
 
 
-def test_choice_is_remembered_in_settings(window):  # noqa: F811
+def test_every_window_starts_on_automatic(window):  # noqa: F811
     w = window.speed_test()
     _wait(lambda: w._list_thread is None)
     w.set_choice(speedtest.FALLBACK_SERVERS[0])
     w.duration.setCurrentIndex(0)
     w._remember_choice(w.options())
-    assert window.settings.speed_test_server == speedtest.FALLBACK_SERVERS[0].url
     assert window.settings.speed_test_seconds == 5.0
     w.close()
+    _wait(lambda: not window.findChildren(SpeedTestWindow))  # deleted on close
+    window.settings.speed_test_server = speedtest.FALLBACK_SERVERS[0].url  # from 1.21
     w2 = window.speed_test()
-    assert w2.options().server == speedtest.FALLBACK_SERVERS[0]
+    assert w2 is not w
+    assert same_choice(w2._choice, speedtest.CLOUDFLARE)
     assert w2.options().duration_s == 5.0
     w2.close()
 
@@ -394,17 +397,6 @@ def test_automatic_tries_the_nearest_ookla_servers(qapp):
     w.close()
 
 
-def test_automatic_is_remembered_as_automatic(window):  # noqa: F811
-    w = window.speed_test()
-    _wait(lambda: w._list_thread is None)
-    w._servers_loaded([(speedtest.FALLBACK_OOKLA[1], 8.0)])
-    w.set_choice(speedtest.CLOUDFLARE)
-    w._remember_choice(w.options())
-    # Not the server it resolved to this time, so the next run picks afresh.
-    assert window.settings.speed_test_server == speedtest.CLOUDFLARE.url
-    w.close()
-
-
 def test_nearest_ookla_ignores_unreachable_and_other_kinds():
     a, b, c = speedtest.FALLBACK_OOKLA[:3]
     other = speedtest.FALLBACK_SERVERS[0]
@@ -440,3 +432,13 @@ def test_graph_reads_the_clock_and_shows_the_hovered_reading(qapp):
     g.hover = QPointF(g._plots["upload"].center())
     assert g.hovered() is None
     assert len(_clock(start)) == 8 and _clock(start).count(":") == 2
+
+
+def test_footer_names_automatic_nearby_not_cloudflare(qapp, monkeypatch):
+    thai = speedtest.FALLBACK_OOKLA[:2]
+    ranked = [(thai[0], 9.0), (thai[1], 11.0)] + OFFLINE
+    monkeypatch.setattr(speedtest, "rank_servers", lambda servers, on_progress=None: ranked)
+    w = SpeedTestWindow()
+    _wait(lambda: w._list_thread is None)
+    assert w.server_label.text() == "Next test: the fastest of 2 nearby servers"
+    w.close()
