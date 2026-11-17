@@ -128,6 +128,20 @@ class RowDelegate(QStyledItemDelegate):
             painter.fillRect(rect.left(), rect.top(), 3, rect.height(), QColor(color))
 
 
+class DetailWidget(QWidget):
+    """An opened row's contents. The tree sizes a row by its widget's
+    sizeHint, which for wrapped labels guesses at a width; this one reports
+    the height worked out for the real width (DnsCheckWindow._fit_details)."""
+
+    fitted_height = 0
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        if self.fitted_height:
+            hint.setHeight(self.fitted_height)
+        return hint
+
+
 class DnsCheckWindow(QWidget):
     """A non-modal window: a domain, Run checks, and a row per check."""
 
@@ -276,6 +290,18 @@ class DnsCheckWindow(QWidget):
         self.tree.itemCollapsed.connect(lambda item: self._set_chevron(item, False))
         self.tree.viewport().installEventFilter(self)
         head = self.tree.header()
+        #: Opens or closes every row's details; sits at the header's right end.
+        self.expand_button = QToolButton(head)
+        self.expand_button.setObjectName("expandAll")
+        self.expand_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.expand_button.setStyleSheet(
+            f"QToolButton#expandAll {{ border: none; background: transparent; color: {BLUE};"
+            f" font-size: 11px; font-weight: 600; padding: 0 4px; }}"
+            f" QToolButton#expandAll:hover {{ text-decoration: underline; }}")
+        self.expand_button.clicked.connect(self.toggle_all)
+        self.expand_button.setVisible(False)
+        self._update_expand_button()
+        head.installEventFilter(self)
         head.setStretchLastSection(False)
         head.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         for column, mode in ((COL_CHECK, QHeaderView.ResizeMode.Fixed),
@@ -400,6 +426,7 @@ class DnsCheckWindow(QWidget):
         self._set_chips([("Checking…", muted, "pending", rgba(muted, 0.14))])
         self.tree.clear()
         self._items.clear()
+        self.expand_button.setVisible(False)
         for key in dns_check.CHECKS:
             item = QTreeWidgetItem(self.tree, [dns_check.CHECK_TITLES[key], "Checking…", ""])
             self._style_title(item)
@@ -417,6 +444,7 @@ class DnsCheckWindow(QWidget):
             self._add_result(result)
         self._update_counts()
         self._apply_filter()
+        self._update_expand_button()
         self._show_dns_servers()
         self.footer_note.setText(f"Checked {report.domain}")
         for button in (self.copy_button, self.export_button):
@@ -565,7 +593,9 @@ class DnsCheckWindow(QWidget):
     def _fit_details(self) -> None:
         """Give each opened row the height its wrapped text needs at the
         tree's current width (a widget in a tree row doesn't ask for it)."""
-        width = self.tree.viewport().width()
+        # The row's stylesheet padding (4px 6px) and bottom border sit around
+        # the widget, so it gets 12px less width and needs 9px more height.
+        width = self.tree.viewport().width() - 12
         for index in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(index)
             for child in range(item.childCount()):
@@ -573,43 +603,85 @@ class DnsCheckWindow(QWidget):
                 widget = self.tree.itemWidget(detail, 0)
                 if widget is None or widget.layout() is None:
                     continue
+                # Apply the stylesheets first (the records' monospace font and
+                # padding), or the height is worked out for the wrong font.
+                widget.ensurePolished()
+                for label in widget.findChildren(QWidget):
+                    label.ensurePolished()
+                widget.layout().invalidate()
                 height = widget.layout().totalHeightForWidth(width)
                 if height <= 0:
                     height = widget.sizeHint().height()
+                if isinstance(widget, DetailWidget):
+                    widget.fitted_height = height
+                height += 9 + 2  # the row's padding and border, and a little air
                 if detail.sizeHint(0).height() != height:
                     detail.setSizeHint(0, QSize(width, height))
-        self.tree.doItemsLayout()
+        self.tree.scheduleDelayedItemsLayout()
 
     def eventFilter(self, obj, event):
         if obj is self.tree.viewport() and event.type() == QEvent.Type.Resize:
             QTimer.singleShot(0, self._fit_details)
+        elif obj is self.tree.header() and event.type() == QEvent.Type.Resize:
+            self._place_expand_button()
         return super().eventFilter(obj, event)
 
     def _detail_widget(self, result: dns_check.CheckResult) -> QWidget:
-        """The opened row: the records (monospace) and the notes, each in a
-        plain wrapped label so the row's height can be worked out."""
+        """The opened row: the records (monospace, with a Copy button beside
+        them) and the notes under them, each in a plain wrapped label so the
+        row's height can be worked out."""
         c = self._colors
-        widget = QWidget()
-        widget.setStyleSheet(f"background: {c['bg']};")
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(20, 6, 12, 8)
-        column = QVBoxLayout()
-        column.setSpacing(4)
+        widget = DetailWidget()
+        widget.setObjectName("detail")
+        # A plain QWidget only paints a stylesheet background with this set;
+        # without it the row shows through between the labels.
+        widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        widget.setStyleSheet(
+            f"QWidget#detail {{ background: {c['bg']}; }}"
+            f" QLabel {{ background: transparent; }}"
+            f" QLabel#records {{ background: {c['hover']}; border-radius: 5px; padding: 4px 8px; }}"
+            f" QToolButton#copyRecords {{ border: 1px solid {c['border']}; border-radius: 5px;"
+            f" background: {c['surface']}; color: {c['ink']}; padding: 3px 8px; font-size: 11px; }}"
+            f" QToolButton#copyRecords:hover {{ border-color: {BLUE}; color: {BLUE}; }}")
+        column = QVBoxLayout(widget)
+        column.setContentsMargins(20, 8, 12, 10)
+        column.setSpacing(6)
         if result.records:
             row = QHBoxLayout()
             row.setSpacing(12)
             caption = QLabel("Record" if len(result.records) == 1 else "Records")
-            caption.setStyleSheet(f"color: {c['muted']};")
-            caption.setAlignment(Qt.AlignmentFlag.AlignTop)
+            caption.setStyleSheet(f"color: {c['muted']}; padding-top: 4px;")
+            caption.setFixedWidth(56)
             records = QLabel("\n".join(breakable(r) for r in result.records))
+            records.setObjectName("records")
             records.setTextFormat(Qt.TextFormat.PlainText)
             records.setWordWrap(True)
             records.setFont(fonts.mono())
             records.setProperty("mono", True)  # the app's stylesheet sets fonts by this
-            records.setStyleSheet(f"background: {c['hover']}; padding: 1px 6px;")
             records.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            copy = QToolButton()
+            copy.setObjectName("copyRecords")
+            copy.setText("Copy")
+            copy.setIcon(glyphs.icon("copy", c["ink"], 12))
+            copy.setIconSize(QSize(12, 12))
+            copy.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            copy.setFixedWidth(72)
+            copy.setCursor(Qt.CursorShape.PointingHandCursor)
+            copy.setToolTip("Copy record" if len(result.records) == 1 else "Copy records")
+
+            def copy_records() -> None:
+                QGuiApplication.clipboard().setText("\n".join(result.records))
+                copy.setText("Copied")
+                # Parented to the button, so it dies with it (a new run).
+                timer = QTimer(copy)
+                timer.setSingleShot(True)
+                timer.timeout.connect(lambda: copy.setText("Copy"))
+                timer.start(1200)
+
+            copy.clicked.connect(copy_records)
             row.addWidget(caption, 0, Qt.AlignmentFlag.AlignTop)
             row.addWidget(records, 1)
+            row.addWidget(copy, 0, Qt.AlignmentFlag.AlignTop)
             column.addLayout(row)
         if result.details:
             notes = QLabel("\n".join(result.details))
@@ -618,15 +690,6 @@ class DnsCheckWindow(QWidget):
             notes.setStyleSheet(f"color: {c['muted']};")
             notes.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             column.addWidget(notes)
-        layout.addLayout(column, 1)
-        if result.records:
-            copy = QToolButton()
-            copy.setText("Copy record" if len(result.records) == 1 else "Copy records")
-            copy.setStyleSheet(f"QToolButton {{ border: none; background: transparent; "
-                               f"color: {BLUE}; text-decoration: underline; padding: 0; }}")
-            copy.clicked.connect(
-                lambda: QGuiApplication.clipboard().setText("\n".join(result.records)))
-            layout.addWidget(copy, 0, Qt.AlignmentFlag.AlignTop)
         return widget
 
     def _toggle_item(self, item: QTreeWidgetItem, _column: int) -> None:
@@ -636,6 +699,41 @@ class DnsCheckWindow(QWidget):
     def _set_chevron(self, item: QTreeWidgetItem, expanded: bool) -> None:
         if item.parent() is None and item.childCount():
             item.setText(COL_CHEVRON, "⌄" if expanded else "›")
+            if expanded:
+                QTimer.singleShot(0, self._fit_details)
+        self._update_expand_button()
+
+    def _expandable(self) -> list[QTreeWidgetItem]:
+        return [item for item in self._items.values() if item.childCount()]
+
+    def all_expanded(self) -> bool:
+        items = self._expandable()
+        return bool(items) and all(item.isExpanded() for item in items)
+
+    def toggle_all(self) -> None:
+        """Open every row's details, or close them all if all are open."""
+        expand = not self.all_expanded()
+        for item in self._expandable():
+            item.setExpanded(expand)
+        self._update_expand_button()
+
+    def _update_expand_button(self) -> None:
+        button = getattr(self, "expand_button", None)
+        if button is None:
+            return
+        expanded = self.all_expanded()
+        button.setText("Collapse all ⌃" if expanded else "Expand all ⌄")
+        button.setToolTip("Hide every row's details" if expanded
+                          else "Show every row's details")
+        button.setVisible(bool(self._expandable()))
+        button.adjustSize()
+        self._place_expand_button()
+
+    def _place_expand_button(self) -> None:
+        head = self.tree.header()
+        button = self.expand_button
+        button.move(head.width() - button.width() - 8, (head.height() - button.height()) // 2)
+        button.raise_()
 
     # -- DKIM selector / PTR IP -------------------------------------------------
 
