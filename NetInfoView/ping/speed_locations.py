@@ -109,14 +109,6 @@ class Location:
         """For the Server field and "Selected:": "Tokyo · A573"."""
         return " · ".join(p for p in (self.city or self.country, self.sponsor) if p)
 
-    @property
-    def detail(self) -> str:
-        """The line under the title: "Tokyo · NRT · A573", or for a local
-        server "BKK · True Online"."""
-        if self.local:
-            return " · ".join(p for p in (self.code, self.sponsor) if p) or self.country
-        return self.subtitle
-
     def matches(self, query: str) -> bool:
         query = query.strip().casefold()
         return not query or any(query in p.casefold() for p in (

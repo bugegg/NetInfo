@@ -225,14 +225,9 @@ class ServerPicker(QFrame):
         self._chip_group = QButtonGroup(self)
         self._chip_group.setExclusive(True)
 
-        self._cloudflare_ms: float | None = None
         #: The nearest Ookla server once the list is timed, with its connect
-        #: time: Automatic picks the fastest of the few nearest; until then
-        #: it runs on Cloudflare.
+        #: time: Automatic tests on it; until then it runs on Cloudflare.
         self.nearest: tuple[ServerSpec, float] | None = None
-        self.automatic: ServerRow | None = None
-        self._auto_slot = QVBoxLayout()
-        self._auto_slot.setContentsMargins(0, 0, 0, 0)
 
         list_head = QHBoxLayout()
         locations = QLabel("AVAILABLE LOCATIONS")
@@ -278,7 +273,8 @@ class ServerPicker(QFrame):
         layout.addLayout(head)
         layout.addWidget(self.search)
         layout.addLayout(self.chips)
-        layout.addLayout(self._auto_slot)
+        # No Automatic row: Automatic is the nearest server, which the list
+        # shows (and marks selected) like any other.
         layout.addLayout(list_head)
         layout.addWidget(scroll, 1)
         layout.addWidget(rule)
@@ -305,12 +301,10 @@ class ServerPicker(QFrame):
             self.search.removeAction(self._search_action)
         self._search_action = self.search.addAction(
             glyphs.icon("search", muted, 16), QLineEdit.ActionPosition.LeadingPosition)
-        if self.automatic is not None:
-            self._rebuild_auto()
-            if self.isVisible():
-                self._rebuild()
-            else:
-                self._dirty = True
+        if self.isVisible():
+            self._rebuild()
+        else:
+            self._dirty = True
 
     # --------------------------------------------------------------- data
 
@@ -329,14 +323,6 @@ class ServerPicker(QFrame):
         if sip.isdeleted(self) or sip.isdeleted(self.list_layout):
             return
         self.nearest = nearest
-        self._rebuild_auto()
-        self._sync_selection()
-
-    def set_cloudflare_latency(self, ms: float | None) -> None:
-        if sip.isdeleted(self) or sip.isdeleted(self.list_layout):
-            return  # the window went while the timing was on its way
-        self._cloudflare_ms = ms
-        self._rebuild_auto()
         self._sync_selection()
 
     def _badge(self, name: str = "", icon: str = "", color: str = BLUE,
@@ -349,12 +335,6 @@ class ServerPicker(QFrame):
         else:
             badge.set_provider(name, domain, getattr(self._window, "logos", None))
         return badge
-
-    def location_of(self, spec: ServerSpec) -> Location:
-        return locate(spec)
-
-    def latency_of(self, spec: ServerSpec) -> float | None:
-        return next((ms for s, ms in self._ranked if s.url == spec.url), None)
 
     def _rebuild_chips(self) -> None:
         while self.chips.count():
@@ -390,27 +370,7 @@ class ServerPicker(QFrame):
 
     def _rebuild(self) -> None:
         theme = getattr(self._window, "theme", {}) or {}
-        self._rebuild_auto()
         self._build_rows(theme)
-
-    def _rebuild_auto(self) -> None:
-        theme = getattr(self._window, "theme", {}) or {}
-        if self.automatic is not None:
-            self._auto_slot.removeWidget(self.automatic)
-            self.automatic.hide()
-            self.automatic.deleteLater()
-        if self.nearest is not None:
-            spec, auto_ms = self.nearest
-            auto_line = "Fastest of the nearest servers in Thailand"
-        else:
-            auto_ms = self._cloudflare_ms
-            auto_line = "Lowest latency · Cloudflare"
-        self.automatic = ServerRow(CLOUDFLARE, self._badge(icon="globe"), "Automatic",
-                                   [auto_line], ms=auto_ms,
-                                   show_latency=auto_ms is not None, theme=theme)
-        self.automatic.setObjectName("autoRow")
-        self.automatic.clicked.connect(lambda: self._select(CLOUDFLARE))
-        self._auto_slot.addWidget(self.automatic)
 
     def _build_rows(self, theme: dict) -> None:
         self._dirty = False
@@ -488,7 +448,6 @@ class ServerPicker(QFrame):
         self._sync_selection()
 
     def _sync_selection(self) -> None:
-        self.automatic.set_selected(same_choice(self._selected, CLOUDFLARE))
         for row in self._rows:
             row.set_selected(same_choice(row.choice, self._selected))
         self.selected_label.setText(
@@ -501,7 +460,7 @@ class ServerPicker(QFrame):
     def selected_text(self, choice: Choice) -> str:
         if same_choice(choice, CLOUDFLARE):
             if self.nearest is not None:
-                return "Automatic · fastest nearby server"
+                return locate(self.nearest[0]).short
             return "Automatic · Cloudflare"
         if isinstance(choice, ServerSpec):
             return locate(choice).short
@@ -523,6 +482,8 @@ class ServerPicker(QFrame):
         return QPoint(w.width() - width, 0), QPoint(w.width(), 0)
 
     def open_panel(self, current: Choice) -> None:
+        if same_choice(current, CLOUDFLARE) and self.nearest is not None:
+            current = self.nearest[0]  # Automatic is the nearest server
         self._selected = current
         self.search.blockSignals(True)
         self.search.clear()

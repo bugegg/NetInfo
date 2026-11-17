@@ -410,25 +410,3 @@ def test_cloudflare_downloads_start_under_its_limit():
     assert cloudflare.max_down == speedtest.CLOUDFLARE_MAX_DOWN < 100_000_000
     assert _Server("https://speed.example.com").max_down == speedtest.MAX_CHUNK
     assert speedtest.DOWN_CHUNK == speedtest.UP_CHUNK == 100_000_000
-
-
-def test_automatic_tests_the_fastest_candidate(server, monkeypatch):
-    slow = ServerSpec("Slow", server + "/slow", "ookla")
-    fast = ServerSpec("Fast", server + "/fast", "ookla")
-    dead = ServerSpec("Dead", "http://127.0.0.1:9", "ookla")
-    speeds = {"Slow": 100.0, "Fast": 400.0}
-
-    def probe(srv, upload, options, on_sample=None, stop=None):
-        if srv.spec.name not in speeds:
-            raise OSError("refused")
-        return speedtest.TransferResult(mbps=speeds[srv.spec.name])
-
-    monkeypatch.setattr(speedtest, "run_transfer", probe)
-    assert speedtest.pick_fastest((slow, dead, fast)) == fast
-    assert speedtest.pick_fastest((dead,)) is None
-    phases = []
-    opts = SpeedTestOptions(server=slow, candidates=(slow, dead, fast), download=False,
-                            upload=False, latency_count=0)
-    r = speedtest.run_test(opts, on_phase=phases.append)
-    assert phases[:2] == ["choose", "connect"]
-    assert r.meta["server_url"] == fast.url

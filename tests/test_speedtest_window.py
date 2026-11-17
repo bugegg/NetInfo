@@ -1,3 +1,4 @@
+import urllib.parse
 import time
 
 import pytest
@@ -144,8 +145,6 @@ def test_picker_lists_servers_with_country_city_and_latency(qapp):
         ("Japan", "Tokyo · NRT · A573", "100 ms", True),
         ("Germany", "Frankfurt · FRA · Clouvider", "unreachable", False),
     ]
-    assert w.picker.automatic.checked
-    assert w.picker.automatic.latency.text() == "12 ms"
     assert "Automatic · Cloudflare" in w.picker.selected_label.text()
     chips = [w.picker.chips.itemAt(i).widget().text() for i in range(w.picker.chips.count() - 1)]
     assert chips == ["All", "Asia", "Europe"]
@@ -253,7 +252,7 @@ def test_choosing_a_server_in_the_picker(qapp):
     w.open_picker()
     w.picker._rows[0].clicked.emit()
     assert "Tokyo · A573" in w.picker.selected_label.text()
-    assert w.picker._rows[0].checked and not w.picker.automatic.checked
+    assert w.picker._rows[0].checked
     w.picker.use_button.click()
     assert not w.picker.is_open()
     assert w.options().server == speedtest.FALLBACK_SERVERS[0]
@@ -377,23 +376,22 @@ def test_ipv4_only_connection(qapp, monkeypatch):
 
 
 
-def test_automatic_tries_the_nearest_ookla_servers(qapp):
+def test_automatic_goes_straight_to_the_nearest_ookla_server(qapp):
     ookla = speedtest.FALLBACK_OOKLA
     ranked = [(speedtest.FALLBACK_SERVERS[0], 3.0),  # nearer, but not Ookla
               (ookla[0], 20.0), (ookla[1], 8.0), (ookla[2], None), (ookla[3], 9.0)]
     w = SpeedTestWindow(load_servers=False)
     assert w.options().server == speedtest.CLOUDFLARE  # until the list is timed
-    assert w.options().candidates == ()
     w._servers_loaded(ranked)
     opts = w.options()
-    assert opts.candidates == (ookla[1], ookla[3], ookla[0])  # nearest first
-    assert w.server.text.text() == "Automatic (fastest nearby)"
-    # After a run, the one it picked is named.
-    w._finished(SpeedResult(meta={"server_url": ookla[3].url, "host": "x"}))
-    assert w.server.text.text() == f"Automatic · {locate(ookla[3]).short}"
+    assert opts.server == ookla[1]  # the nearest
+    # The field names that server rather than "Automatic".
+    assert w.server.text.text() == locate(ookla[1]).short
+    w._finished(SpeedResult(meta={"server_url": ookla[1].url, "host": "x"}))
+    assert w.server.text.text() == locate(ookla[1]).short
     # A server chosen by hand is used as is, with nothing to try first.
     w.set_choice(ookla[0])
-    assert w.options().server == ookla[0] and w.options().candidates == ()
+    assert w.options().server == ookla[0]
     w.close()
 
 
@@ -440,5 +438,18 @@ def test_footer_names_automatic_nearby_not_cloudflare(qapp, monkeypatch):
     monkeypatch.setattr(speedtest, "rank_servers", lambda servers, on_progress=None: ranked)
     w = SpeedTestWindow()
     _wait(lambda: w._list_thread is None)
-    assert w.server_label.text() == "Next test: the fastest of 2 nearby servers"
+    host = urllib.parse.urlsplit(thai[0].url).hostname
+    assert w.server_label.text() == f"Next test: {host}"  # the nearest, by name
+    w.close()
+
+
+def test_picker_has_no_automatic_row_and_marks_the_nearest(qapp):
+    ookla = speedtest.FALLBACK_OOKLA
+    w = SpeedTestWindow(load_servers=False)
+    w.show()
+    w._servers_loaded([(ookla[0], 8.0), (ookla[1], 9.0)])
+    w.open_picker()
+    assert not hasattr(w.picker, "automatic")
+    assert w.picker.selected() == ookla[0]
+    w.picker.close_panel()
     w.close()

@@ -13,11 +13,11 @@ from datetime import datetime
 
 from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, QSysInfo, Qt, QTimer
 from PyQt6.QtGui import (
-    QAction, QColor, QFont, QFontInfo, QPainter, QPainterPath, QPen,
+    QAction, QColor, QFont, QFontInfo, QKeySequence, QPainter, QPainterPath, QPen,
 )
 from PyQt6.QtWidgets import (
     QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton,
-    QScrollArea, QSizePolicy, QSplitter, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget,
+    QScrollArea, QSizePolicy, QSpacerItem, QSplitter, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget,
     QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -26,10 +26,14 @@ from ..model.columns import COLUMNS
 from ..model.samples import nice_ceiling
 from ..ping.port_scan import STATIC_PORTS, STATIC_UDP_PORTS
 from ..settings import DisplayMode
-from . import fonts, glyphs
+from . import fonts, glyphs, threads
 
 BLUE = "#087dff"
 GREEN = "#16a34a"
+#: The status dot while nothing is running.
+IDLE_DOT = "#c9ccd1"
+#: How often the status dot blinks while a task runs.
+BLINK_MS = 1000
 RED = "#e5383b"
 
 #: The device grid's default columns, in order, with shorter headers and
@@ -470,6 +474,43 @@ class LatencyChart(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
 
+SIDEBAR_WIDTH = 180
+#: The sidebar collapsed to its icons.
+RAIL_WIDTH = 52
+
+
+class SidebarGrip(QWidget):
+    """A thin strip on the sidebar's right edge: drag it left to collapse
+    the sidebar to its icons, right to open it again."""
+
+    THRESHOLD = 40
+
+    def __init__(self, action: QAction):
+        super().__init__()
+        self.action = action
+        self._origin: float | None = None
+        self.setObjectName("sidebarGrip")
+        self.setFixedWidth(5)
+        self.setCursor(Qt.CursorShape.SplitHCursor)
+        self.setToolTip("Drag to collapse or expand the sidebar")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._origin = event.globalPosition().x()
+
+    def mouseMoveEvent(self, event):
+        if self._origin is None:
+            return
+        delta = event.globalPosition().x() - self._origin
+        expanded = self.action.isChecked()
+        if (expanded and delta < -self.THRESHOLD) or (not expanded and delta > self.THRESHOLD):
+            self.action.setChecked(not expanded)
+            self._origin = event.globalPosition().x()
+
+    def mouseReleaseEvent(self, event):
+        self._origin = None
+
+
 def follow_action(button: QToolButton, action: QAction) -> None:
     """Trigger `action` from `button` and mirror its enabled state and
     tooltip, keeping the button's own label and icon."""
@@ -491,7 +532,9 @@ class Dashboard(QWidget):
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        root.addWidget(self._build_sidebar())
+        self.sidebar = self._build_sidebar()
+        root.addWidget(self.sidebar)
+        root.addWidget(SidebarGrip(window.action_show_sidebar))
         body = QWidget()
         body.setObjectName("body")
         layout = QVBoxLayout(body)
@@ -512,6 +555,9 @@ class Dashboard(QWidget):
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
         splitter.setSizes([600, 380])
+        self.inspector_collapsed = False
+        self._inspector_height = 380
+        splitter.splitterMoved.connect(self._on_splitter_moved)
         layout.addWidget(splitter, 1)
         root.addWidget(body, 1)
 
@@ -521,6 +567,11 @@ class Dashboard(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
         self.timer.start(1000)
+        #: Blinks the status dot while pinging or any other task runs.
+        self._blink_on = True
+        self.blink_timer = QTimer(self)
+        self.blink_timer.setInterval(BLINK_MS)
+        self.blink_timer.timeout.connect(self._blink)
         for signal in (window._model.modelReset, window._model.rowsInserted,
                        window._model.rowsRemoved):
             signal.connect(self.refresh)
@@ -558,18 +609,24 @@ class Dashboard(QWidget):
         w = self.window
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(180)
+        sidebar.setFixedWidth(SIDEBAR_WIDTH)
         nav = QVBoxLayout(sidebar)
         nav.setContentsMargins(10, 12, 10, 10)
         nav.setSpacing(2)
 
         brand = QHBoxLayout()
         brand.setSpacing(8)
-        logo = QLabel()
-        logo.setPixmap(glyphs.pixmap("brand", BLUE, 22))
-        brand.addWidget(logo)
-        brand.addWidget(label("NetInfoView", "brand"))
-        brand.addStretch()
+        self.brand_logo = QLabel()
+        self.brand_logo.setPixmap(glyphs.pixmap("brand", BLUE, 22))
+        brand.addWidget(self.brand_logo)
+        self.brand_label = label("NetInfoView", "brand")
+        brand.addWidget(self.brand_label)
+        self._brand_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Expanding)
+        brand.addItem(self._brand_spacer)
+        self._brand_row = brand
+        self.sidebar_toggle = self._toggle_button(
+            "sidebar", w.action_show_sidebar, "Collapse or expand the sidebar")
+        brand.addWidget(self.sidebar_toggle)
         nav.addLayout(brand)
         nav.addSpacing(12)
 
@@ -645,7 +702,61 @@ class Dashboard(QWidget):
         footer.addWidget(self.connection_ip, 2, 1)
         footer.setColumnStretch(1, 1)
         nav.addLayout(footer)
+        self._footer = footer
+        self._sidebar_layout = nav
+        self._nav_buttons = [b for b in sidebar.findChildren(QToolButton)
+                             if b.objectName() in ("navButton", "navSelected")]
+        for button in self._nav_buttons:
+            button.setProperty("navText", button.text())
+        #: Hidden while the sidebar is collapsed to its icon rail.
+        self._sidebar_texts = [self.brand_logo, self.brand_label, self.connection_state,
+                               self.version_label, self.computer_name, self.connection_ip]
+        self.sidebar_collapsed = False
         return sidebar
+
+    def set_sidebar_collapsed(self, collapsed: bool) -> None:
+        """Shrink the sidebar to a rail of its icons (tooltips name them),
+        or open it back up."""
+        if collapsed == self.sidebar_collapsed:
+            return
+        self.sidebar_collapsed = collapsed
+        self.sidebar.setFixedWidth(RAIL_WIDTH if collapsed else SIDEBAR_WIDTH)
+        self._sidebar_layout.setContentsMargins(*((8, 12, 8, 10) if collapsed else (10, 12, 10, 10)))
+        for widget in self._sidebar_texts:
+            widget.setVisible(not collapsed)
+        style = (Qt.ToolButtonStyle.ToolButtonIconOnly if collapsed
+                 else Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.sidebar.setProperty("rail", collapsed)
+        # On the rail the toggle lines up with the icons below it.
+        self._brand_spacer.changeSize(0, 0, QSizePolicy.Policy.Fixed if collapsed
+                                      else QSizePolicy.Policy.Expanding)
+        self._brand_row.invalidate()
+        self.sidebar_toggle.style().unpolish(self.sidebar_toggle)
+        self.sidebar_toggle.style().polish(self.sidebar_toggle)
+        for button in self._nav_buttons:
+            button.style().unpolish(button)
+            button.style().polish(button)
+            button.setToolButtonStyle(style)
+            text = button.property("navText")
+            if collapsed and not button.toolTip():
+                button.setToolTip(text)
+        # On the rail the dot sits centred under the icons, not at the
+        # footer's left margin.
+        self._footer.setContentsMargins(*((0, 0, 0, 0) if collapsed else (6, 0, 4, 0)))
+        self._footer.setHorizontalSpacing(0 if collapsed else 10)
+        self.connection_dot.setAlignment(
+            Qt.AlignmentFlag.AlignCenter if collapsed
+            else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.connection_dot.setToolTip(
+            f"{self.connection_state.text()} {self.connection_ip.text()}".strip() if collapsed else "")
+        self.apply_icons()
+        # As wide as an icon button (sized once the icons are set), so its
+        # centre is the icons' centre.
+        if collapsed:
+            self.connection_dot.setFixedWidth(self.nav_settings.sizeHint().width())
+        else:
+            self.connection_dot.setMinimumWidth(0)
+            self.connection_dot.setMaximumWidth(16777215)
 
     def _build_heading(self) -> QHBoxLayout:
         w = self.window
@@ -667,6 +778,17 @@ class Dashboard(QWidget):
         ), "large")
         heading.addWidget(self.export_button)
         return heading
+
+    def _toggle_button(self, icon: str, action: QAction, tip: str) -> QToolButton:
+        """An icon-only button that flips a checkable `action`; the
+        shortcut is named in the tooltip."""
+        button = QToolButton()
+        button.setObjectName("iconToggle")
+        keys = action.shortcut().toString(QKeySequence.SequenceFormat.NativeText)
+        button.setToolTip(f"{tip} ({keys})" if keys else tip)
+        button.clicked.connect(action.toggle)
+        self._icon(button, icon)
+        return button
 
     def _build_summary(self) -> QFrame:
         summary = QFrame()
@@ -819,21 +941,30 @@ class Dashboard(QWidget):
         layout.setSpacing(6)
 
         head = QHBoxLayout()
-        head.setSpacing(8)
+        head.setSpacing(0)
+        #: Everything in the header but the fold button; hidden when folded.
+        self.selection_head = QWidget()
+        selection = QHBoxLayout(self.selection_head)
+        selection.setContentsMargins(0, 0, 0, 0)
+        selection.setSpacing(8)
+        head.addWidget(self.selection_head)
         self.selection_icon = QLabel()
         self._icon(self.selection_icon, "devices")
-        head.addWidget(self.selection_icon)
+        selection.addWidget(self.selection_icon)
         self.selection_title = label("Select a device to inspect", "selectionTitle")
-        head.addWidget(self.selection_title)
+        selection.addWidget(self.selection_title)
         self.selection_rule = QFrame()
         self.selection_rule.setObjectName("vrule")
         self.selection_rule.setFixedSize(1, 16)
-        head.addWidget(self.selection_rule)
+        selection.addWidget(self.selection_rule)
         self.selection_ip = label("", "selectionIp")
-        head.addWidget(self.selection_ip)
+        selection.addWidget(self.selection_ip)
         self.selection_badge = label("", "badge")
-        head.addWidget(self.selection_badge)
+        selection.addWidget(self.selection_badge)
         head.addStretch()
+        self.pane_toggle = self._toggle_button(
+            "chevron", w.action_show_history, "Collapse or expand the device inspector")
+        head.addWidget(self.pane_toggle)
         layout.addLayout(head)
 
         self.tabs = QTabWidget()
@@ -912,6 +1043,40 @@ class Dashboard(QWidget):
 
     # -- behaviour ---------------------------------------------------------
 
+    def _collapsed_height(self) -> int:
+        return self.inspector.minimumSizeHint().height()
+
+    def set_inspector_collapsed(self, collapsed: bool) -> None:
+        """Fold the inspector down to its header bar (which keeps the
+        button to open it again), or open it back to its last height."""
+        if collapsed == self.inspector_collapsed:
+            return
+        splitter = self.window._splitter
+        total = sum(splitter.sizes())
+        if collapsed:
+            self._inspector_height = max(splitter.sizes()[1], 200)
+        self.inspector_collapsed = collapsed
+        self.tabs.setVisible(not collapsed)
+        self.selection_head.setVisible(not collapsed)
+        self.inspector.layout().setContentsMargins(0, 2 if collapsed else 8, 0, 0)
+        # Collapsed, the table takes every pixel a window resize adds.
+        splitter.setStretchFactor(1, 0 if collapsed else 2)
+        height = self._collapsed_height() if collapsed else min(self._inspector_height, total * 2 // 3)
+        if total > 0:
+            splitter.setSizes([total - height, height])
+        self.apply_icons()
+
+    def _on_splitter_moved(self, *_):
+        """Dragging the divider opens a folded inspector, and dragging an
+        open one down to its smallest folds it."""
+        height = self.window._splitter.sizes()[1]
+        action = self.window.action_show_history
+        if self.inspector_collapsed and height > self._collapsed_height() + 24:
+            self._inspector_height = height
+            action.setChecked(True)
+        elif not self.inspector_collapsed and height <= self.inspector.minimumSizeHint().height() + 4:
+            action.setChecked(False)
+
     def apply_icons(self) -> None:
         colors = theme_colors(self.window.settings.dark_background)
         for widget, name, accent in self._icon_targets:
@@ -921,7 +1086,12 @@ class Dashboard(QWidget):
             if isinstance(widget, QLabel):
                 widget.setPixmap(glyphs.pixmap(name, color, 16))
                 continue
-            size, pad = (16, 8) if widget.objectName() in ("navButton", "navSelected") else (14, 5)
+            size, pad = {"navButton": (16, 8), "navSelected": (16, 8),
+                         "iconToggle": (16, 0)}.get(widget.objectName(), (14, 5))
+            if widget.objectName().startswith("nav") and self.sidebar_collapsed:
+                pad = 0
+            if widget is self.pane_toggle and self.inspector_collapsed:
+                name = "chevronup"
             widget.setIcon(glyphs.icon(name, color, size, pad))
             widget.setIconSize(QSize(size + pad, size))
             if isinstance(widget, MenuButton):
@@ -937,6 +1107,29 @@ class Dashboard(QWidget):
             return "No network connection", ""
         iface = self.interfaces[0]
         return f"Local network · {iface.cidr}", iface.ip_address
+
+    def busy(self) -> bool:
+        """Pinging, or some other task (a scan, a test, an update) running."""
+        w = self.window
+        if w._engine is not None or threads.any_running():
+            return True
+        return any(t is not None and t.isRunning() for t in (
+            w._mtu_thread, w._vendor_update_thread, w._update_check_thread,
+            w._update_download_thread, w._device_info_thread))
+
+    def _set_dot(self, name: str) -> None:
+        if self.connection_dot.objectName() != name:
+            self.connection_dot.setObjectName(name)
+            self.connection_dot.style().polish(self.connection_dot)
+
+    def _blink(self) -> None:
+        if not self.busy():
+            # The task ended between refreshes: settle on idle now.
+            self.blink_timer.stop()
+            self._set_dot("dotIdle")
+            return
+        self._blink_on = not self._blink_on
+        self._set_dot("dotOnline" if self._blink_on else "dotBlinkOff")
 
     def _tick(self) -> None:
         """The once-a-second refresh, skipped while nobody can see it (the
@@ -962,10 +1155,14 @@ class Dashboard(QWidget):
         self.subtitle.setText(subtitle)
         self.connection_state.setText("Go Live!" if ip else "Not connected")
         self.connection_ip.setText(ip)
-        dot = "dotOnline" if ip else "dotOffline"
-        if self.connection_dot.objectName() != dot:
-            self.connection_dot.setObjectName(dot)
-            self.connection_dot.style().polish(self.connection_dot)
+        busy = bool(ip) and self.busy()
+        if busy and not self.blink_timer.isActive():
+            self._blink_on = True
+            self.blink_timer.start()
+        elif not busy:
+            self.blink_timer.stop()
+        self._set_dot("dotOffline" if not ip else
+                      ("dotOnline" if self._blink_on else "dotBlinkOff") if busy else "dotIdle")
 
         running = w._engine is not None
         self.start_button.setVisible(not running)
@@ -1059,6 +1256,8 @@ def apply_theme(window) -> None:
         QLabel#fieldValue {{ font-size: 12px; }}
         QLabel#dotOnline {{ color: {GREEN}; font-size: 11px; }}
         QLabel#dotOffline {{ color: {RED}; font-size: 11px; }}
+        QLabel#dotIdle {{ color: {IDLE_DOT}; font-size: 11px; }}
+        QLabel#dotBlinkOff {{ color: transparent; font-size: 11px; }}
         QLabel#stat {{ font-size: 16px; font-weight: 700; }}
         QLabel#statCaption {{ color: {c['muted']}; font-size: 12px; }}
         QLabel#selectionTitle {{ font-size: 14px; font-weight: 700; }}
@@ -1075,11 +1274,16 @@ def apply_theme(window) -> None:
         QToolButton#primary:hover {{ background: #006ee6; }}
         QToolButton#primary:disabled {{ background: {c['border']}; color: {c['muted']}; }}
         QToolButton#danger {{ background: {RED}; }}
+        QToolButton#iconToggle {{ padding: 4px; border: none; background: transparent; border-radius: 6px; }}
+        QToolButton#iconToggle:hover {{ background: {c['hover']}; }}
         QToolButton#navButton, QToolButton#navSelected {{ border: none; background: transparent;
             text-align: left; padding: 6px 8px; font-size: 12px; min-width: 140px; }}
         QToolButton#navButton:hover {{ background: {c['hover']}; border-radius: 6px; }}
         QToolButton#navSelected {{ background: {c['nav']}; color: {c['nav_ink']}; font-weight: 600;
             border-radius: 6px; }}
+        QFrame#sidebar[rail="true"] QToolButton#navButton,
+        QFrame#sidebar[rail="true"] QToolButton#navSelected {{ min-width: 0; padding: 6px; }}
+        QFrame#sidebar[rail="true"] QToolButton#iconToggle {{ padding: 6px 8px 6px 4px; }}
         QFrame#segment {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 7px; }}
         QPushButton#segmentButton {{ border: none; background: transparent; font-size: 12px;
             padding: 3px 10px; border-radius: 5px; }}

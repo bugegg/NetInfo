@@ -55,7 +55,6 @@ AMBER = "#d97706"
 
 #: (label, seconds per direction).
 DURATIONS = (("Quick · 5 s", 5.0), ("Standard · 10 s", 10.0), ("Long · 20 s", 20.0))
-CLOUDFLARE_LABEL = CLOUDFLARE.name
 DEFAULT_WINDOW = QSize(1060, 940)
 #: The content shrinks to fit down to this size (see SpeedTestWindow._rescale).
 MIN_WINDOW = QSize(760, 650)
@@ -179,18 +178,16 @@ class SpeedTestThread(QThread):
 
 
 class ServerListThread(QThread):
-    """Every server, each with how near it is, and Cloudflare's nearness."""
+    """Every server, each with how near it is."""
     loaded = pyqtSignal(object)  # list[(ServerSpec, ms | None)]
     #: The servers reached so far, ranked, while the rest are still timed.
     partial = pyqtSignal(object)
-    cloudflare = pyqtSignal(object)  # ms | None
 
     def stop(self) -> None:
         pass  # finishes within a few seconds on its own
 
     def run(self) -> None:
         try:
-            self.cloudflare.emit(speedtest.connect_time_ms(speedtest.CLOUDFLARE))
             self.loaded.emit(speedtest.rank_servers(speedtest.fetch_servers(),
                                                     on_progress=self.partial.emit))
         except RuntimeError:  # the app quit while it ran: nobody to tell
@@ -722,21 +719,18 @@ class ServerField(QPushButton):
     def show_choice(self, choice: ServerSpec | str, colo: str = "") -> None:
         self._choice, self._colo = choice, colo
         muted = getattr(self, "_muted", "#5f6673")
-        #: Set by the window: the server Automatic last tested against, and
-        #: whether there are nearby servers for it to choose among yet.
-        picked = getattr(self, "picked", None)
-        nearby = getattr(self, "nearby", False)
+        #: Set by the window: the nearest server, which Automatic tests.
+        nearest = getattr(self, "nearest", None)
         if isinstance(choice, ServerSpec) and choice.url == CLOUDFLARE.url:
-            self.lead.set_pixmap(glyphs.pixmap("globe", BLUE, 16))
-            if picked is not None and not colo:
-                self.text.setText(f"Automatic · {locate(picked).short}")
-                self.setToolTip(f"The fastest nearby server last time: {picked.name}\n"
-                                f"{picked.url}")
-            elif nearby and not colo:
-                self.text.setText("Automatic (fastest nearby)")
-                self.setToolTip("Tries the nearest few servers in Thailand for a second "
-                                "each, then tests the fastest")
+            if nearest is not None and not colo:
+                # Automatic shows the server it will use, not "Automatic".
+                where = locate(nearest)
+                self.lead.set_provider(where.sponsor or where.country, server_domain(nearest),
+                                       getattr(self, "logos", None))
+                self.text.setText(where.short)
+                self.setToolTip(f"Automatic: the nearest server\n{nearest.name}\n{nearest.url}")
             else:
+                self.lead.set_pixmap(glyphs.pixmap("globe", BLUE, 16))
                 self.text.setText(f"Automatic · {colo}" if colo else "Automatic (Cloudflare)")
                 self.setToolTip("Cloudflare's nearest data centre, until the nearest "
                                 "server in Thailand is found")
@@ -1005,10 +999,9 @@ class SpeedTestWindow(QWidget):
         self.server.show_choice(choice, colo)
         if self._result is None:
             if same_choice(choice, CLOUDFLARE) and self._candidates:
-                # Automatic runs on Cloudflare only when there's nothing nearby.
-                self.server_label.setText(
-                    f"Next test: the fastest of {len(self._candidates)} nearby servers")
-                return
+                # Automatic: the nearest server (Cloudflare only when there's
+                # nothing nearby).
+                choice = self._candidates[0]
             url = choice.url if isinstance(choice, ServerSpec) else choice
             host = urllib.parse.urlsplit(url).hostname or url
             self.server_label.setText(f"Next test: {host}")
@@ -1025,7 +1018,7 @@ class SpeedTestWindow(QWidget):
         if index >= 0:
             self.duration.setCurrentIndex(index)
         # The server isn't restored: every window starts on Automatic (the
-        # fastest nearby), and a server picked by hand lasts while it's open.
+        # nearest server), and a server picked by hand lasts while it's open.
 
     def _remember_choice(self, options: SpeedTestOptions) -> None:
         settings = self._settings()
@@ -1345,14 +1338,9 @@ class SpeedTestWindow(QWidget):
 
     def load_servers(self) -> None:
         self._list_thread = track(ServerListThread())
-        self._list_thread.cloudflare.connect(self._set_cloudflare_ms)
         self._list_thread.loaded.connect(self._servers_loaded)
         self._list_thread.partial.connect(self._servers_partial)
         self._list_thread.start()
-
-    @from_thread
-    def _set_cloudflare_ms(self, ms) -> None:
-        self.picker.set_cloudflare_latency(ms)
 
     @from_thread
     def _servers_partial(self, ranked) -> None:
@@ -1366,7 +1354,7 @@ class SpeedTestWindow(QWidget):
         if candidates == self._candidates:
             return
         self._candidates = candidates
-        self.server.nearby = bool(candidates)
+        self.server.nearest = candidates[0] if candidates else None
         self.picker.set_nearest(nearest[0] if nearest else None)
         if self._thread is None and same_choice(self._choice, CLOUDFLARE):
             self.set_choice(self._choice)
@@ -1462,9 +1450,7 @@ class SpeedTestWindow(QWidget):
                                       padding: {px(8, 5)}px {px(10, 7)}px; }}
             QPushButton#iconButton:disabled {{ background: {c['panel']}; }}
             QFrame#card[tone="neutral"] {{ background: {c['grid']}; }}
-            QFrame#autoRow {{ border: 1px solid {c['border']}; border-radius: 10px; }}
-            QFrame#autoRow:hover {{ background: {c['head']}; }}
-            QFrame#autoRow[selected="true"], QFrame#serverRow[selected="true"]
+            QFrame#serverRow[selected="true"]
                 {{ background: {c['down']}; border: 2px solid {BLUE}; border-radius: 10px; }}
             QLabel#pickerSelected {{ font-size: 13px; font-weight: 600; }}
             QPushButton#serverField {{ background: {c['field']}; border: 1px solid {c['border']};
@@ -1574,8 +1560,8 @@ class SpeedTestWindow(QWidget):
 
     def options(self) -> SpeedTestOptions:
         if same_choice(self._choice, CLOUDFLARE) and self._candidates:
-            # Automatic: the fastest of the nearest few, found at the start.
-            return SpeedTestOptions(server=self._candidates[0], candidates=self._candidates,
+            # Automatic: straight to the nearest server.
+            return SpeedTestOptions(server=self._candidates[0],
                                     duration_s=self.duration.currentData())
         return SpeedTestOptions(server=self._choice, duration_s=self.duration.currentData())
 
@@ -1637,8 +1623,7 @@ class SpeedTestWindow(QWidget):
         self.gauge.set_value(0.0, phase)
         if phase in ("download", "upload"):
             self.graph.begin(phase)
-        self._set_status("run", {"choose": "Choosing the fastest nearby server…",
-                                 "connect": "Connecting…",
+        self._set_status("run", {"connect": "Connecting…",
                                  "download": "Testing download…",
                                  "upload": "Testing upload…"}.get(phase, ""))
 
@@ -1666,8 +1651,17 @@ class SpeedTestWindow(QWidget):
             return self.server_label.text()
         return server_text(self._result.meta, show_ip=False)
 
+    def _show_picked(self, result: SpeedResult) -> None:
+        """On Automatic, name the server it chose as soon as it has chosen
+        (the first progress report, before the download starts)."""
+        if not same_choice(self._choice, CLOUDFLARE) or "server_url" not in result.meta:
+            return
+        colo = "" if self.server.nearest is not None else result.meta.get("colo", "")
+        self.server.show_choice(CLOUDFLARE, colo)
+
     def _show_cards(self, result: SpeedResult) -> None:
         """Fill in the cards for every phase done so far."""
+        self._show_picked(result)
         if result.latency_ms is not None:
             self.card_ping.set(f"{format_ms(result.latency_ms)} ms",
                                f"Median of {result.ping_count} pings\n ")
@@ -1682,11 +1676,7 @@ class SpeedTestWindow(QWidget):
 
     def _finished(self, result: SpeedResult) -> None:
         self._result = result
-        if same_choice(self._choice, CLOUDFLARE):
-            url = result.meta.get("server_url", "")
-            self.server.picked = next((s for s in self._candidates if s.url == url), None)
-            colo = "" if self.server.picked else result.meta.get("colo", "")
-            self.server.show_choice(CLOUDFLARE, colo)
+        self._show_picked(result)
         self.server_label.setText(self._footer_text())
         self._show_cards(result)
         if result.upload is None and self.card_up.note.text().startswith("Measuring"):
@@ -1800,7 +1790,6 @@ class SpeedTestWindow(QWidget):
                 retire(thread)
                 setattr(self, name, None)
         if self._list_thread is not None:
-            self._list_thread.cloudflare.disconnect()
             self._list_thread.loaded.disconnect()
             retire(self._list_thread)
             self._list_thread = None

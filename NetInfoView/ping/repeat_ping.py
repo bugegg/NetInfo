@@ -33,18 +33,12 @@ from .result import PingStatus, status_for_icmp
 
 #: IP + ICMP headers, which IOS counts in the datagram size.
 HEADER_BYTES = 28
-MIN_SIZE = 36
 DEFAULT_SIZE = 100
-#: macOS caps an unprivileged ICMP datagram at net.inet.raw.maxdgram (8192
-#: bytes of ICMP); Windows' IcmpSendEcho takes up to 65500 bytes of data.
-MAX_SIZE = 65500 + HEADER_BYTES if IS_WINDOWS else 8192 + 20
 DEFAULT_COUNT = 5
 #: IOS's own ceiling for a repeat count.
 MAX_COUNT = 2147483647
 DEFAULT_TIMEOUT = 2.0
 DEFAULT_PATTERN = 0xABCD
-#: IOS wraps the result characters at this width.
-LINE_WIDTH = 70
 
 SUCCESS = "!"
 _CHAR_FOR_STATUS = {
@@ -152,14 +146,6 @@ def payload(size: int, pattern: int) -> bytes:
 def build_echo(ident: int, sequence: int, data: bytes) -> bytes:
     header = _ICMP_HEADER.pack(ICMP_ECHO_REQUEST, 0, 0, ident, sequence)
     return _ICMP_HEADER.pack(ICMP_ECHO_REQUEST, 0, checksum(header + data), ident, sequence) + data
-
-
-def parse_pattern(text: str) -> int:
-    """"0xABCD" or "ABCD" -> 0xABCD; ValueError unless 0-0xFFFF."""
-    value = int(text.strip(), 16)
-    if not 0 <= value <= 0xFFFF:
-        raise ValueError(text)
-    return value
 
 
 def _status_for_send_error(exc: OSError) -> PingStatus:

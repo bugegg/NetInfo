@@ -22,7 +22,9 @@ GROUP_PREFIX = "group:"
 #: The most addresses one CIDR block or range may expand to (a /16). Expansion
 #: is linear, so a typo like 192.168.1.0/2 — on the way to typing /24 — would
 #: otherwise build a billion entries and hang the app.
-MAX_RANGE_ADDRESSES = 65536
+MAX_RANGE_ADDRESSES = 256
+#: The most a user may raise the per-range limit to (a /8).
+MAX_RANGE_ADDRESSES_CEILING = 16_777_216
 
 #: A trailing :port, but not the colons inside an IPv6 literal.
 _PORT_RE = re.compile(r"^(?P<host>[^:\s]+):(?P<port>\d{1,5})$")
@@ -48,11 +50,11 @@ class HostListError(ValueError):
     """A line that cannot be used, e.g. a range over MAX_RANGE_ADDRESSES."""
 
 
-def _check_range_size(token: str, count: int) -> None:
-    if count > MAX_RANGE_ADDRESSES:
+def _check_range_size(token: str, count: int, limit: int) -> None:
+    if count > limit:
         raise HostListError(
-            f"{token} covers {count:,} addresses; the limit is "
-            f"{MAX_RANGE_ADDRESSES:,} (a /16) per range."
+            f"{token} covers {count:,} addresses; the limit is {limit:,} per range "
+            "(change it in Settings > Maximum addresses per range)."
         )
 
 
@@ -66,9 +68,13 @@ def has_hosts(text: str) -> bool:
 
 
 def parse_host_list(
-    text: str, skip_first: bool = False, skip_last: bool = False
+    text: str,
+    skip_first: bool = False,
+    skip_last: bool = False,
+    max_addresses: int = MAX_RANGE_ADDRESSES,
 ) -> list[ParsedHost]:
-    """Expand a host-list document into one ParsedHost per address."""
+    """Expand a host-list document into one ParsedHost per address. A range
+    or CIDR block over `max_addresses` raises HostListError."""
     hosts: list[ParsedHost] = []
     group = ""
 
@@ -91,7 +97,7 @@ def parse_host_list(
         token, _, description = line.partition(" ")
         description = description.strip()
         hosts.extend(
-            _expand(token, description, group, enabled, skip_first, skip_last)
+            _expand(token, description, group, enabled, skip_first, skip_last, max_addresses)
         )
 
     return hosts
@@ -104,11 +110,12 @@ def _expand(
     enabled: bool,
     skip_first: bool,
     skip_last: bool,
+    max_addresses: int,
 ) -> list[ParsedHost]:
     def make(host: str, port: int | None = None) -> ParsedHost:
         return ParsedHost(host, port, description, group, enabled)
 
-    addresses = _expand_addresses(token, skip_first, skip_last)
+    addresses = _expand_addresses(token, skip_first, skip_last, max_addresses)
     if addresses is not None:
         return [make(address) for address in addresses]
 
@@ -122,7 +129,7 @@ def _expand(
 
 
 def _expand_addresses(
-    token: str, skip_first: bool, skip_last: bool
+    token: str, skip_first: bool, skip_last: bool, max_addresses: int
 ) -> list[str] | None:
     """Expand a CIDR block or address range, or return None if it is neither."""
     match = _CIDR_RE.match(token)
@@ -131,7 +138,7 @@ def _expand_addresses(
             network = ipaddress.IPv4Network(token, strict=False)
         except ValueError:
             return None
-        _check_range_size(token, network.num_addresses)
+        _check_range_size(token, network.num_addresses, max_addresses)
         # /31 and /32 have no network/broadcast pair to trim.
         addresses = (
             list(network.hosts()) if network.prefixlen < 31 else list(network)
@@ -141,19 +148,21 @@ def _expand_addresses(
     match = _FULL_RANGE_RE.match(token)
     if match:
         return _trim(
-            _range(token, match.group("start"), match.group("end")), skip_first, skip_last
+            _range(token, match.group("start"), match.group("end"), max_addresses),
+            skip_first,
+            skip_last,
         )
 
     match = _SHORT_RANGE_RE.match(token)
     if match:
         start = match.group("start")
         end = start.rsplit(".", 1)[0] + "." + match.group("last_octet")
-        return _trim(_range(token, start, end), skip_first, skip_last)
+        return _trim(_range(token, start, end, max_addresses), skip_first, skip_last)
 
     return None
 
 
-def _range(token: str, start: str, end: str) -> list[str]:
+def _range(token: str, start: str, end: str, max_addresses: int) -> list[str]:
     try:
         first = ipaddress.IPv4Address(start)
         last = ipaddress.IPv4Address(end)
@@ -161,7 +170,7 @@ def _range(token: str, start: str, end: str) -> list[str]:
         return []
     if int(last) < int(first):
         first, last = last, first
-    _check_range_size(token, int(last) - int(first) + 1)
+    _check_range_size(token, int(last) - int(first) + 1, max_addresses)
     return [str(ipaddress.IPv4Address(n)) for n in range(int(first), int(last) + 1)]
 
 

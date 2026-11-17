@@ -415,6 +415,11 @@ class MainWindow(QMainWindow):
         self.action_show_history = self._checkable(
             "Show &Lower Pane", self.settings.show_history_pane, self._toggle_history_pane
         )
+        self.action_show_history.setShortcut(QKeySequence("Ctrl+Alt+L"))
+        self.action_show_sidebar = self._checkable(
+            "Show S&idebar", self.settings.show_sidebar, self._toggle_sidebar
+        )
+        self.action_show_sidebar.setShortcut(QKeySequence("Ctrl+Alt+S"))
         self.action_auto_scroll = self._checkable(
             "Auto &Scroll Lower Pane", self.settings.auto_scroll_history,
             self._toggle_auto_scroll,
@@ -549,6 +554,7 @@ class MainWindow(QMainWindow):
             skip_first=self.settings.add_hosts_skip_first,
             skip_last=self.settings.add_hosts_skip_last,
             replace=self.settings.add_hosts_replace,
+            max_addresses=self.settings.max_range_addresses,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
@@ -580,7 +586,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Load Host List", f"Could not read the file:\n{exc}")
             return
         try:
-            parsed = hostfile.parse_host_list(text)
+            parsed = hostfile.parse_host_list(
+                text, max_addresses=self.settings.max_range_addresses
+            )
         except hostfile.HostListError as exc:
             QMessageBox.warning(self, "Load Host List", str(exc))
             return
@@ -734,7 +742,10 @@ class MainWindow(QMainWindow):
         window = self._graph_window
         # A just-closed window lingers until Qt deletes it; don't reuse it.
         if window is None or not window.isVisible():
-            window = PingGraphWindow(list(keys), self._samples, self._describe_host, self)
+            window = PingGraphWindow(
+                list(keys), self._samples, self._describe_host, self,
+                timeout_ms=lambda: self.settings.ping_timeout_ms,
+            )
             window.destroyed.connect(self._on_graph_window_destroyed)
             self._graph_window = window
             window.freeze(self._stopped_at)
@@ -1019,7 +1030,9 @@ class MainWindow(QMainWindow):
             return False
 
         try:
-            parsed = hostfile.parse_host_list(iface.cidr)
+            parsed = hostfile.parse_host_list(
+                iface.cidr, max_addresses=self.settings.max_range_addresses
+            )
         except hostfile.HostListError as exc:
             # A corporate /8 or the like: too big to scan whole.
             QMessageBox.warning(self, "Scan a Network", str(exc))
@@ -1204,7 +1217,8 @@ class MainWindow(QMainWindow):
     # -- view options ------------------------------------------------------
 
     def _apply_view_settings(self) -> None:
-        self._dashboard.inspector.setVisible(self.settings.show_history_pane)
+        self._dashboard.set_inspector_collapsed(not self.settings.show_history_pane)
+        self._dashboard.set_sidebar_collapsed(not self.settings.show_sidebar)
         self._toggle_always_on_top(self.settings.always_on_top)
         self._apply_palette()
         if self.settings.font_family:
@@ -1257,7 +1271,11 @@ class MainWindow(QMainWindow):
 
     def _toggle_history_pane(self, checked: bool) -> None:
         self.settings.show_history_pane = checked
-        self._dashboard.inspector.setVisible(checked)
+        self._dashboard.set_inspector_collapsed(not checked)
+
+    def _toggle_sidebar(self, checked: bool) -> None:
+        self.settings.show_sidebar = checked
+        self._dashboard.set_sidebar_collapsed(not checked)
 
     def _toggle_auto_scroll(self, checked: bool) -> None:
         self.settings.auto_scroll_history = checked

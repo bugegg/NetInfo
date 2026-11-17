@@ -147,9 +147,6 @@ class SpeedTestOptions:
     pause_s: float = 1.5
     download: bool = True
     upload: bool = True
-    #: Automatic: try each of these for PROBE_S first and test the fastest
-    #: (`server` is then only the fallback should none of them answer).
-    candidates: tuple[ServerSpec, ...] = ()
 
 
 @dataclass
@@ -487,8 +484,6 @@ def fetch_servers(timeout: float = 8.0) -> list[ServerSpec]:
 #: answered within 0.5 ms of each other, yet one downloaded at ~150 Mbps
 #: and another at ~430, depending on how each network peers with the ISP.
 AUTO_CANDIDATES = 4
-PROBE_S = 1.0
-PROBE_STREAMS = 4
 
 
 def nearest_ookla(ranked: list[tuple[ServerSpec, float | None]],
@@ -500,24 +495,6 @@ def nearest_ookla(ranked: list[tuple[ServerSpec, float | None]],
     220 Mbps up where a Bangkok Ookla server gave about 390)."""
     reachable = [(s, ms) for s, ms in ranked if s.kind == "ookla" and ms is not None]
     return sorted(reachable, key=lambda item: item[1])[:count]
-
-
-def pick_fastest(specs: tuple[ServerSpec, ...] | list[ServerSpec], seconds: float = PROBE_S,
-                 stop: threading.Event | None = None) -> ServerSpec | None:
-    """Download from each server for `seconds`, one after another, and
-    return the fastest (None if none of them sent anything)."""
-    best, best_mbps = None, 0.0
-    probe = SpeedTestOptions(duration_s=seconds, ramp_s=seconds * 0.3, streams=PROBE_STREAMS)
-    for spec in specs:
-        if stop is not None and stop.is_set():
-            break
-        try:
-            speed = run_transfer(_Server(spec), False, probe, stop=stop).mbps
-        except (OSError, ValueError, http.client.HTTPException):
-            continue
-        if speed > best_mbps:
-            best, best_mbps = spec, speed
-    return best
 
 
 def connect_time_ms(spec: ServerSpec, timeout: float = 2.0, tries: int = 2) -> float | None:
@@ -829,7 +806,7 @@ def run_test(options: SpeedTestOptions,
              on_progress: Callable[[SpeedResult], None] | None = None) -> SpeedResult:
     """As nPerf runs it: connect, download, a pause, upload, a pause, then
     ping (latency and jitter, on the line the transfers have left quiet).
-    ``on_phase`` gets "choose" (Automatic trying its candidates), "connect",
+    ``on_phase`` gets "connect",
     "download", "pause", "upload", "ping";
     ``on_sample`` gets (phase, seconds, value): Mbps for the transfers, the
     round trip in ms for each ping; ``on_progress`` gets the result so far
@@ -838,10 +815,6 @@ def run_test(options: SpeedTestOptions,
     stopped = lambda: stop is not None and stop.is_set()  # noqa: E731
     try:
         spec = options.server
-        if options.candidates:
-            if on_phase:
-                on_phase("choose")
-            spec = pick_fastest(options.candidates, stop=stop) or spec
         result.meta["server_url"] = spec.url if isinstance(spec, ServerSpec) else spec
         server = _Server(spec)
         if on_phase:

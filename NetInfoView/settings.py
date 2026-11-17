@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, fields
 from enum import Enum
 
+from .fileio.hostfile import MAX_RANGE_ADDRESSES as _MAX_RANGE_ADDRESSES
+from .fileio.hostfile import MAX_RANGE_ADDRESSES_CEILING as _MAX_RANGE_CEILING
 from .ping.port_scan import DEFAULT_PORTS_TEXT as _DEFAULT_PORT_SCAN_PORTS
 
 #: Where settings and the vendor database are stored.
@@ -93,6 +95,8 @@ class Settings:
     max_accumulated_pings: int = 50000
     auto_scroll_history: bool = True
     show_history_pane: bool = True
+    #: The navigation sidebar on the window's left.
+    show_sidebar: bool = True
 
     # -- add hosts dialog ----------------------------------------------------
     #: What was last entered in Add Hosts, offered again next time it opens.
@@ -101,6 +105,9 @@ class Settings:
     add_hosts_skip_last: bool = False
     #: Add Hosts replaces the current list rather than adding to it.
     add_hosts_replace: bool = True
+    #: The largest range or CIDR block (in addresses) a host list or network
+    #: scan may expand; 256 is a /24.
+    max_range_addresses: int = _MAX_RANGE_ADDRESSES
 
     def sanitised(self) -> "Settings":
         """Clamp values the dialogs or a config file could put out of range."""
@@ -111,6 +118,9 @@ class Settings:
         self.max_concurrent_pings = max(1, int(self.max_concurrent_pings))
         self.stop_after_pings = max(0, int(self.stop_after_pings))
         self.max_accumulated_pings = max(100, int(self.max_accumulated_pings))
+        self.max_range_addresses = min(
+            _MAX_RANGE_CEILING, max(1, int(self.max_range_addresses))
+        )
         self.route_log_keep_days = min(3650, max(1, int(self.route_log_keep_days)))
         self.route_latency_warn_ms = max(1.0, float(self.route_latency_warn_ms))
         self.route_latency_crit_ms = max(self.route_latency_warn_ms + 1,

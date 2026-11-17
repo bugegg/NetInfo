@@ -71,7 +71,9 @@ def main(argv: list[str] | None = None) -> int:
         try:
             with open(path, encoding="utf-8", errors="replace") as handle:
                 window._model.set_entries(
-                    window._entries_from_parsed(parse_host_list(handle.read()))
+                    window._entries_from_parsed(parse_host_list(
+                        handle.read(), max_addresses=settings.max_range_addresses
+                    ))
                 )
         except (OSError, HostListError):
             continue

@@ -1,13 +1,10 @@
-"""The green/red/grey status dots from PingInfoView's first column, plus the
-toolbar's gear icon — all drawn at runtime rather than shipped as image
-files, since Qt has no built-in gear glyph to fall back on."""
+"""The green/red/grey status dots in the table's first column, drawn at
+runtime rather than shipped as image files."""
 
 from __future__ import annotations
 
-import math
-
-from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QBrush, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 
 from ..ping.result import PingStatus
 
@@ -43,60 +40,6 @@ def status_icon(name: str) -> QIcon:
     icon = QIcon(pixmap)
     _CACHE[name] = icon
     return icon
-
-
-def gear_icon(size: int = 22, teeth: int = 8, colour: QColor | None = None) -> QIcon:
-    """A simple cog/gear glyph for the toolbar's settings button: a ring of
-    teeth around a solid body, with a hole punched through the centre.
-
-    Built as one closed polygon (the teeth' own inner vertices already trace
-    the body between them, so no separate hub shape is needed) and then the
-    centre hole is cut with QPainterPath.subtracted() — path boolean
-    subtraction, rather than drawing an overlapping circle under
-    OddEvenFill, which XORs overlapping fills into a hole exactly where the
-    teeth and a separate hub shape coincide.
-    """
-    colour = colour or QColor(70, 70, 70)
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-    centre = QPointF(size / 2, size / 2)
-    outer_r = size * 0.46
-    inner_r = size * 0.30  # the body the teeth sit on top of
-    hole_r = size * 0.13
-    tooth_half_width = math.pi / teeth * 0.42  # radians
-
-    body = QPainterPath()
-    for i in range(teeth):
-        mid = 2 * math.pi * i / teeth
-        a0, a1 = mid - tooth_half_width, mid + tooth_half_width
-        p_out0 = centre + QPointF(outer_r * math.cos(a0), outer_r * math.sin(a0))
-        p_out1 = centre + QPointF(outer_r * math.cos(a1), outer_r * math.sin(a1))
-        p_in1 = centre + QPointF(inner_r * math.cos(a1), inner_r * math.sin(a1))
-        next_mid = 2 * math.pi * (i + 1) / teeth
-        p_in_next = centre + QPointF(
-            inner_r * math.cos(next_mid - tooth_half_width),
-            inner_r * math.sin(next_mid - tooth_half_width),
-        )
-        if i == 0:
-            body.moveTo(p_out0)
-        else:
-            body.lineTo(p_out0)
-        body.lineTo(p_out1)
-        body.lineTo(p_in1)
-        body.lineTo(p_in_next)
-    body.closeSubpath()
-
-    hole = QPainterPath()
-    hole.addEllipse(centre, hole_r, hole_r)
-
-    painter.setBrush(QBrush(colour))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawPath(body.subtracted(hole))
-    painter.end()
-    return QIcon(pixmap)
 
 
 def icon_name_for(entry) -> str:

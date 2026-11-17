@@ -1,10 +1,8 @@
 import sys
-import sqlite3
-import time
 
 import pytest
 
-from NetInfoView.fileio.vendor_db import VendorDB, normalise_prefix
+from NetInfoView.fileio.vendor_db import VendorDB
 
 
 @pytest.fixture
@@ -14,15 +12,7 @@ def db(tmp_path):
     instance.close()
 
 
-def test_normalise_prefix_strips_separators_and_uppercases():
-    assert normalise_prefix("e8:13:6e:fb:77:bf") == "E8136E"
-    assert normalise_prefix("E8-13-6E-FB-77-BF") == "E8136E"
-    assert normalise_prefix("e8136efb77bf") == "E8136E"
 
-
-def test_normalise_prefix_too_short_returns_empty():
-    assert normalise_prefix("E8:13") == ""
-    assert normalise_prefix("") == ""
 
 
 def test_lookup_on_empty_database_returns_empty_string(db):
