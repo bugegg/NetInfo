@@ -12,7 +12,13 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ..fileio.hostfile import HostListError, ParsedHost, has_hosts, parse_host_list
+from ..fileio.hostfile import (
+    MAX_RANGE_ADDRESSES,
+    HostListError,
+    ParsedHost,
+    has_hosts,
+    parse_host_list,
+)
 
 HELP = (
     "One host per line. A description may follow the address.\n"
@@ -30,9 +36,11 @@ class AddHostsDialog(QDialog):
         skip_first: bool = False,
         skip_last: bool = False,
         replace: bool = True,
+        max_addresses: int = MAX_RANGE_ADDRESSES,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Add Hosts")
+        self._max_addresses = max_addresses
         self.resize(540, 400)
 
         self._editor = QPlainTextEdit(initial_text)
@@ -98,4 +106,5 @@ class AddHostsDialog(QDialog):
             self._editor.toPlainText(),
             skip_first=self._skip_first.isChecked(),
             skip_last=self._skip_last.isChecked(),
+            max_addresses=self._max_addresses,
         )

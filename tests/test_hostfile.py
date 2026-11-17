@@ -127,8 +127,9 @@ def test_ranges_over_the_limit_are_refused_without_expanding():
     assert time.perf_counter() - started < 1.0
 
 
-def test_a_slash_16_is_still_allowed():
-    assert len(parse_host_list("192.168.0.0/16")) == 65534
+def test_a_slash_24_is_allowed_by_default_and_a_slash_16_when_raised():
+    assert len(parse_host_list("192.168.0.0/24")) == 254
+    assert len(parse_host_list("192.168.0.0/16", max_addresses=65536)) == 65534
 
 
 def test_has_hosts_ignores_blank_group_and_bare_hash_lines():
@@ -138,3 +139,21 @@ def test_has_hosts_ignores_blank_group_and_bare_hash_lines():
     assert not has_hosts("  \nGroup: A\n#\n")
     assert has_hosts("Group: A\n#192.168.1.1")
     assert has_hosts("192.168.1.0/2")
+
+
+def test_the_range_limit_can_be_raised_or_lowered():
+    from NetInfoView.fileio.hostfile import HostListError
+
+    assert len(parse_host_list("10.0.0.0/15", max_addresses=131072)) == 131070
+    with pytest.raises(HostListError, match="limit is 100"):
+        parse_host_list("192.168.0.0/24", max_addresses=100)
+    with pytest.raises(HostListError):
+        parse_host_list("192.168.0.1-192.168.0.200", max_addresses=100)
+
+
+def test_the_range_limit_setting_is_clamped():
+    from NetInfoView.settings import Settings
+
+    assert Settings().max_range_addresses == 256
+    assert Settings(max_range_addresses=0).sanitised().max_range_addresses == 1
+    assert Settings(max_range_addresses=10**9).sanitised().max_range_addresses == 16_777_216

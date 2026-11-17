@@ -27,7 +27,7 @@ from ..ping.repeat_ping import RepeatOptions, RepeatStats
 from .threads import retire, track
 
 #: The window's repeat count to start with (IOS's own default is 5).
-WINDOW_COUNT = 1000
+WINDOW_COUNT = 10_000
 
 
 class GroupedSpinBox(QSpinBox):

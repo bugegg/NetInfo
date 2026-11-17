@@ -280,6 +280,9 @@ class PingGraphWidget(_TimeAxisWidget):
         self.frame_color = QColor("#888888")
         #: Greys out the time before the first ping; None leaves the bands.
         self.no_data_color: QColor | None = NO_DATA_COLOR
+        #: The ping timeout. A lost ping is stamped when it timed out, so it
+        #: was really sent up to this long before its timestamp.
+        self.timeout_seconds = 3.0
 
     # -- geometry ------------------------------------------------------------
 
@@ -376,7 +379,8 @@ class PingGraphWidget(_TimeAxisWidget):
         """A lost ping is red from when it was sent until the next ping, so a
         run of timeouts (which space pings out) reads as one solid block
         rather than thin bars with gaps between them."""
-        gap_limit = self._expected_gap() * 3
+        expected = self._expected_gap()
+        gap_limit = expected * 3
         painter.setClipRect(plot)
         for i, sample in enumerate(self._samples):
             if sample.rtt_ms is not None:
@@ -386,7 +390,16 @@ class PingGraphWidget(_TimeAxisWidget):
             )
             # A pause in pinging after it isn't part of the loss.
             until = min(following, sample.timestamp + gap_limit)
-            x = self._x_for(sample.timestamp, plot)
+            # It's stamped when it timed out: the wait for it, back to where
+            # the previous ping's line stops, is part of the loss too, or a
+            # timeout would leave a blank gap before its bar.
+            since = sample.timestamp
+            if i > 0:
+                previous = self._samples[i - 1]
+                held = previous.timestamp + (expected if previous.rtt_ms is not None else 0)
+                since = max(held, sample.timestamp - self.timeout_seconds - expected)
+                since = min(since, sample.timestamp)
+            x = self._x_for(since, plot)
             width = max(3.0, self._x_for(until, plot) - x)
             if x + width >= plot.left() and x <= plot.right():
                 painter.fillRect(
@@ -581,10 +594,13 @@ class PingGraphWindow(QWidget):
         store: SampleStore,
         describe: Callable[[int], tuple[str, str] | None],
         parent: QWidget | None = None,
+        timeout_ms: Callable[[], int] = lambda: 3000,
     ) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self._store = store
+        #: The current ping timeout, which places lost pings on the graph.
+        self._timeout_ms = timeout_ms
         #: key -> (display name, IP), or None once the host has been removed.
         self._describe = describe
         self.panels: list[HostGraphPanel] = []
@@ -788,7 +804,9 @@ class PingGraphWindow(QWidget):
         self.time_axis.span_seconds = span
         self.time_axis.set_samples([], end)
         labels = []
+        timeout = self._timeout_ms() / 1000
         for panel in self.panels:
+            panel.graph.timeout_seconds = timeout
             name, ip = self._describe(panel.key)
             label = f"{name} ({ip})" if ip and ip != name else name
             labels.append(label)

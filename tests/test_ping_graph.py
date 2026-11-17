@@ -316,3 +316,31 @@ def test_a_run_of_timeouts_is_one_solid_red_block(qapp):
     xs = range(int(plot.left()) + 20, int(plot.right()) - 20, 7)
     reds = [image.pixelColor(int(x * scale), y).name() == LOSS_COLOR.name() for x in xs]
     assert all(reds)
+
+
+def test_a_timeout_has_no_gap_before_its_red_bar(qapp):
+    """A lost ping is stamped when it timed out (3 s after it was sent);
+    its bar must reach back to where the previous ping's line ends rather
+    than leave a blank gap while the reply was awaited."""
+    from NetInfoView.model.samples import Sample
+    from NetInfoView.ui.ping_graph import LINE_COLOR, LOSS_COLOR, PingGraphWidget
+
+    widget = PingGraphWidget()
+    widget.resize(800, 120)
+    widget.span_seconds = 20
+    widget.first_seen = 0
+    widget.no_data_color = None
+    widget.timeout_seconds = 3.0
+    pings = [Sample(t, 5.0) for t in range(0, 10)] + [Sample(13, None)]
+    pings += [Sample(t, 5.0) for t in range(14, 21)]
+    widget.set_samples(pings, 20)
+    image = widget.grab().toImage()
+    scale = image.devicePixelRatio()
+    plot = widget._plot_rect()
+    y = int(plot.top() + 4)
+    # From the last good ping's line end (10 s) to the loss's (14 s): red.
+    xs = [widget._x_for(t, plot) for t in (10.2, 11, 12, 13.5)]
+    assert all(
+        image.pixelColor(int(x * scale), int(y * scale)).name() == LOSS_COLOR.name()
+        for x in xs
+    )

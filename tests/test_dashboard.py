@@ -1,5 +1,6 @@
 """Interaction coverage for the redesigned monitoring shell."""
 import pytest
+from PyQt6.QtCore import Qt
 from test_main_window import window, qapp, _entries_with_statuses
 from NetInfoView.ping.result import PingResult, PingStatus
 from NetInfoView.settings import DisplayMode
@@ -43,11 +44,60 @@ def test_inspector_tracks_selection_and_lower_pane_visibility(window):
     assert 'Router' in window._dashboard.selection_title.text()
     assert window._history_proxy.filter_keys == {entries[0].key}
     window._toggle_history_pane(False)
-    assert window._dashboard.inspector.isHidden()
+    assert window._dashboard.tabs.isHidden()
     window._toggle_history_pane(True)
-    assert not window._dashboard.inspector.isHidden()
+    assert not window._dashboard.tabs.isHidden()
     window._table.clearSelection()
     assert window._dashboard.selection_title.text() == 'Select a device to inspect'
+
+
+def test_sidebar_collapses_to_its_icons(window):
+    dash = window._dashboard
+    dash.sidebar_toggle.click()
+    assert dash.sidebar_collapsed and not window.settings.show_sidebar
+    assert dash.sidebar.width() == dash.sidebar.minimumWidth() < 80
+    assert dash.brand_label.isHidden() and not dash.sidebar_toggle.isHidden()
+    assert dash.nav_devices.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonIconOnly
+    dash.sidebar_toggle.click()
+    assert not dash.sidebar_collapsed and window.settings.show_sidebar
+    assert not dash.brand_label.isHidden()
+
+
+def test_dragging_the_sidebar_edge_collapses_and_expands_it(window):
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtTest import QTest
+    from NetInfoView.ui.dashboard import SidebarGrip
+    window.show()
+    grip = window._dashboard.findChild(SidebarGrip)
+    QTest.mousePress(grip, Qt.MouseButton.LeftButton, pos=QPoint(2, 100))
+    QTest.mouseMove(grip, QPoint(-60, 100))
+    assert window._dashboard.sidebar_collapsed
+    QTest.mouseMove(grip, QPoint(20, 100))
+    assert not window._dashboard.sidebar_collapsed
+    QTest.mouseRelease(grip, Qt.MouseButton.LeftButton, pos=QPoint(20, 100))
+
+
+def test_inspector_folds_to_its_header_and_unfolds(window):
+    dash = window._dashboard
+    dash.pane_toggle.click()
+    assert dash.inspector_collapsed and not window.settings.show_history_pane
+    assert dash.tabs.isHidden() and dash.selection_head.isHidden()
+    assert not dash.pane_toggle.isHidden()
+    dash.pane_toggle.click()
+    assert not dash.inspector_collapsed and window.settings.show_history_pane
+    assert not dash.tabs.isHidden()
+
+
+def test_dragging_the_divider_up_unfolds_the_inspector(window):
+    dash = window._dashboard
+    window.resize(1200, 800)
+    window.show()
+    window.action_show_history.setChecked(False)
+    splitter = window._splitter
+    total = sum(splitter.sizes())
+    splitter.setSizes([total - 300, 300])
+    dash._on_splitter_moved()
+    assert not dash.inspector_collapsed and window.action_show_history.isChecked()
 
 
 def test_columns_menu_retains_access_to_every_existing_column(window):
@@ -325,3 +375,40 @@ def test_latency_chart_scrolls_back_through_history_and_no_further(window):
     window._table.selectRow(1)  # another host starts at now
     chart.grab()
     assert chart.offset == 0
+
+
+def test_status_dot_blinks_while_busy_and_is_grey_when_idle(window, monkeypatch):
+    d = window._dashboard
+    monkeypatch.setattr(d, "_network_text", lambda: ("Local network", "10.0.0.5"))
+    busy = [False]
+    monkeypatch.setattr(d, "busy", lambda: busy[0])
+    d.refresh()
+    assert d.connection_dot.objectName() == "dotIdle" and not d.blink_timer.isActive()
+
+    busy[0] = True
+    d.refresh()
+    assert d.blink_timer.isActive() and d.connection_dot.objectName() == "dotOnline"
+    d._blink()
+    assert d.connection_dot.objectName() == "dotBlinkOff"
+    d._blink()
+    assert d.connection_dot.objectName() == "dotOnline"
+
+    # The task ends between refreshes: the next blink settles on idle.
+    busy[0] = False
+    d._blink()
+    assert d.connection_dot.objectName() == "dotIdle" and not d.blink_timer.isActive()
+
+    monkeypatch.setattr(d, "_network_text", lambda: ("No network", ""))
+    d.refresh()
+    assert d.connection_dot.objectName() == "dotOffline"
+
+
+def test_busy_counts_pinging_and_worker_threads(window, monkeypatch):
+    from NetInfoView.ui import threads
+
+    d = window._dashboard
+    monkeypatch.setattr(threads, "any_running", lambda: False)
+    window._engine = None
+    assert not d.busy()
+    monkeypatch.setattr(threads, "any_running", lambda: True)
+    assert d.busy()

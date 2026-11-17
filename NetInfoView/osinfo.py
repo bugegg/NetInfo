@@ -11,7 +11,6 @@ import subprocess
 import sys
 
 IS_WINDOWS = sys.platform == "win32"
-IS_MACOS = sys.platform == "darwin"
 
 def run_quietly(args: list[str], timeout: float) -> str:
     """stdout of a command, or "" if it can't be run.

@@ -130,6 +130,7 @@ class PortScanWindow(QWidget):
         self.protocol = QComboBox()
         for label, _ in PROTOCOLS:
             self.protocol.addItem(label)
+        self.protocol.setCurrentText("TCP + UDP")
         self.protocol.setToolTip(
             "UDP: well-known services get a real request (DNS, NTP, SNMP, …); a port that "
             "never replies may be open or firewalled (open|filtered)"

@@ -15,7 +15,6 @@ copy: by itself once a month, or from Update MAC Vendor Database.
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import sqlite3
 import threading
@@ -24,8 +23,6 @@ from pathlib import Path
 
 from ..osinfo import IS_WINDOWS
 from ..settings import APPLICATION, LEGACY_APPLICATION
-
-_HEX_PREFIX = re.compile(r"[0-9A-Fa-f]{6,}")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS oui (
@@ -84,15 +81,7 @@ def bundled_db_path() -> Path:
     return Path(__file__).resolve().parent.parent / "data" / "vendor.sqlite"
 
 
-def normalise_prefix(mac: str) -> str:
-    """The first 3 octets of a MAC as 6 uppercase hex digits, no separators.
 
-    Accepts any of the forms the app sees a MAC in: ``E8:13:6E:FB:77:BF``,
-    ``e8-13-6e-...``, or already-bare ``E8136E...``. Returns "" if there
-    aren't even 6 hex digits to take from.
-    """
-    hex_digits = "".join(ch for ch in mac if ch in "0123456789abcdefABCDEF")
-    return hex_digits[:6].upper() if len(hex_digits) >= 6 else ""
 
 
 #: Hex digits in an MA-S, MA-M and MA-L assignment, longest first.

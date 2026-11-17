@@ -53,6 +53,8 @@ _PATHS = {
     "export": '<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8M16 6l-4-4-4 4M12 2v13"/>',
     "search": '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>',
     "filter": '<path d="M22 3H2l8 9.46V19l4 2v-8.54z"/>',
+    "sidebar": '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
+    "chevronup": '<path d="m6 15 6-6 6 6"/>',
     "columns": '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18"/>',
     "chevron": '<path d="m6 9 6 6 6-6"/>',
     "activity": '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',

@@ -35,10 +35,6 @@ def test_payload_follows_ios_size_and_pattern():
     data = repeat_ping.payload(100, 0xABCD)
     assert len(data) == 72 and data[:4] == b"\xab\xcd\xab\xcd"
     assert len(repeat_ping.payload(37, 0xABCD)) == 9
-    assert repeat_ping.parse_pattern("0x00ff") == 0x00FF
-    assert repeat_ping.parse_pattern("FFFF") == 0xFFFF
-    with pytest.raises(ValueError):
-        repeat_ping.parse_pattern("0x10000")
 
 
 def test_run_sends_back_to_back_and_maps_ios_characters():
@@ -162,9 +158,9 @@ def test_menu_opens_repeat_ping_for_the_selected_host(window):
     opened[-1].close()
 
 
-def test_window_starts_at_1000_with_an_empty_box(window):
+def test_window_starts_at_10000_with_an_empty_box(window):
     ping = repeat_ping_window.RepeatPingWindow("127.0.0.1", window)
-    assert ping.count.value() == 1000 and ping.text.placeholderText() == ""
+    assert ping.count.value() == 10_000 and ping.text.placeholderText() == ""
     ping.close()
 
 

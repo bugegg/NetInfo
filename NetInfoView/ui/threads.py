@@ -33,6 +33,11 @@ def track(thread: QThread) -> QThread:
     return thread
 
 
+def any_running() -> bool:
+    """True while some tracked worker thread (a scan, a test, ...) is busy."""
+    return any(t.isRunning() for t in list(_running))
+
+
 def retire(thread: QThread) -> None:
     """Let a thread its window no longer listens to finish on its own: the
     app owns it from now on and deletes it once it has finished."""

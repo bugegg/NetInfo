@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ..fileio.hostfile import MAX_RANGE_ADDRESSES_CEILING
 from ..settings import Settings
 
 
@@ -110,6 +111,18 @@ class OptionsDialog(QDialog):
         self._max_accumulated.setRange(100, 10000000)
         self._max_accumulated.setValue(settings.max_accumulated_pings)
 
+        self._max_range = QSpinBox()
+        self._max_range.setRange(1, MAX_RANGE_ADDRESSES_CEILING)
+        self._max_range.setGroupSeparatorShown(True)
+        self._max_range.setSuffix(" addresses")
+        self._max_range.setValue(settings.max_range_addresses)
+        self._max_range.setToolTip(
+            "The largest address range or CIDR block that Add Hosts, Load Host\n"
+            "List or a network scan will expand. 256 is a /24 (the default);\n"
+            "16,777,216 is a /8. Very large lists use a lot of memory and take\n"
+            "a long time to ping."
+        )
+
         self._route_keep_days = QSpinBox()
         self._route_keep_days.setRange(1, 3650)
         self._route_keep_days.setSuffix(" days")
@@ -137,6 +150,7 @@ class OptionsDialog(QDialog):
         advanced_form.addRow("", self._snmp_arp_auto)
         advanced_form.addRow("SNMP community:", self._snmp_community)
         advanced_form.addRow("Keep at most (lower pane):", self._max_accumulated)
+        advanced_form.addRow("Maximum addresses per range:", self._max_range)
 
         route_box = QGroupBox("Ping Monitor")
         route_form = QFormLayout(route_box)
@@ -172,6 +186,7 @@ class OptionsDialog(QDialog):
             snmp_community=self._snmp_community.text(),
             snmp_arp_auto=self._snmp_arp_auto.isChecked(),
             max_accumulated_pings=self._max_accumulated.value(),
+            max_range_addresses=self._max_range.value(),
             route_log_keep_days=self._route_keep_days.value(),
         )
         return updated.sanitised()
