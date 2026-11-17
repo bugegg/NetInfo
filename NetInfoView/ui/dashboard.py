@@ -663,6 +663,10 @@ class Dashboard(QWidget):
         self.nav_speed_test = self._tool_button("Speed Test", "speed", "navButton",
                                                 w.action_speed_test)
         nav.addWidget(self.nav_speed_test)
+        # DNS Check grades a domain's DNS and e-mail records.
+        self.nav_dns_check = self._tool_button("DNS Check", "dns", "navButton",
+                                               w.action_dns_check)
+        nav.addWidget(self.nav_dns_check)
         # Settings opens Options straight away; the view toggles (dark
         # background, font, lower pane, ...) stay on the grid's right-click menu.
         self.nav_settings = self._tool_button("Settings", "settings", "navButton", w.action_options)

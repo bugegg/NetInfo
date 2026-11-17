@@ -62,6 +62,7 @@ from .port_scan_window import PortScanThread, PortScanWindow
 from .repeat_ping_window import RepeatPingThread, RepeatPingWindow
 from .speedtest_window import SpeedTestThread, SpeedTestWindow
 from .snmp_test_window import SnmpTestWindow
+from .dns_check_window import DnsCheckThread, DnsCheckWindow
 from .tracepath_window import TracepathThread, TracepathWindow
 from .ping_graph import PingGraphWindow
 from . import terminal
@@ -362,6 +363,13 @@ class MainWindow(QMainWindow):
             "Measure the Internet connection's download, upload, ping and jitter"
         )
         self.action_speed_test.triggered.connect(self.speed_test)
+
+        self.action_dns_check = QAction("&DNS Check", self)
+        self.action_dns_check.setShortcut(QKeySequence("Ctrl+Shift+D"))
+        self.action_dns_check.setToolTip(
+            "Check a domain's DNS and e-mail records: NS, A/AAAA, MX, SPF, DMARC, DKIM and PTR"
+        )
+        self.action_dns_check.triggered.connect(self.dns_check)
 
         self.action_route_monitor = QAction("Ping &Monitor", self)
         self.action_route_monitor.setShortcut(QKeySequence("Ctrl+R"))
@@ -867,6 +875,17 @@ class MainWindow(QMainWindow):
         window.show()
         window.raise_()
         window.activateWindow()
+        return window
+
+    def dns_check(self) -> DnsCheckWindow:
+        """The DNS Check window (one at a time); it checks when a domain is
+        entered."""
+        window = next(iter(self.findChildren(DnsCheckWindow)), None) or DnsCheckWindow(
+            self.settings, self)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        window.domain.setFocus()
         return window
 
     def port_scan(self) -> PortScanWindow:
@@ -1537,6 +1556,8 @@ class MainWindow(QMainWindow):
             window.close()
         for window in self.findChildren(SpeedTestWindow):
             window.close()
+        for window in self.findChildren(DnsCheckWindow):
+            window.close()
         for thread in QCoreApplication.instance().findChildren(TracepathThread):
             thread.wait(3000)
         for thread in QCoreApplication.instance().findChildren(NetPathThread):
@@ -1548,6 +1569,8 @@ class MainWindow(QMainWindow):
         for thread in QCoreApplication.instance().findChildren(RepeatPingThread):
             thread.wait(3000)
         for thread in QCoreApplication.instance().findChildren(SpeedTestThread):
+            thread.wait(3000)
+        for thread in QCoreApplication.instance().findChildren(DnsCheckThread):
             thread.wait(3000)
         self._vendor_db.close()
         self.settings.save()

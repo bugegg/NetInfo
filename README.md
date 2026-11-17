@@ -7,6 +7,9 @@ details (MAC address, hostname, vendor, open ports) for hosts that answer.
 on one host — common ports, 1–1024, all 65535, or your own list — with the
 service and banner behind each. **Repeat Ping** is a Cisco-style
 `ping … repeat`: echoes back to back (100000 is fine), with Cisco's defaults.
+**DNS Check** (sidebar) grades a domain's NS, SOA, A/AAAA, MX, SPF, DMARC,
+DKIM (selector found automatically) and PTR records, blacklists, SSL
+certificate and registration expiry, and names its mail provider.
 See [spec.md](spec.md) for the full specification. NetInfoView was
 called NetInfo up to version 1.4, and PingInfoView before that.
 

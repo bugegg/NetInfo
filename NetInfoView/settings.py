@@ -70,6 +70,11 @@ class Settings:
     speed_test_server: str = ""
     #: Speed Test's length per direction, in seconds.
     speed_test_seconds: float = 10.0
+    #: DNS Check: the domains checked (newest first, one per line), the DKIM
+    #: selectors and the sending IP checked for PTR.
+    dns_check_history: str = ""
+    dns_check_selectors: str = ""
+    dns_check_ip: str = ""
 
     # -- grid ----------------------------------------------------------------
     display_mode: DisplayMode = DisplayMode.ALL
