@@ -255,6 +255,15 @@ def test_window_runs_a_check(window, dns_server, monkeypatch):  # noqa: F811
     assert shown == ["DMARC", "DKIM", "PTR", "Blocklist"]
     assert w.show_attention.text() == "Needs attention (4)"
     w.show_all.click()
+    # Expand all opens every row with details; pressed again it closes them.
+    rows = [w.tree.topLevelItem(i) for i in range(w.tree.topLevelItemCount())
+            if w.tree.topLevelItem(i).childCount()]
+    assert rows and w.expand_button.text().startswith("Expand all")
+    w.expand_button.click()
+    assert all(row.isExpanded() for row in rows) and w.all_expanded()
+    assert w.expand_button.text().startswith("Collapse all")
+    w.expand_button.click()
+    assert not any(row.isExpanded() for row in rows)
     assert window.settings.dns_check_history.splitlines()[0] == "good.test"
     assert w.copy_button.isEnabled()
     w.copy_summary()
