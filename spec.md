@@ -72,6 +72,8 @@ Pininfoview/
 │   │   ├── tracepath.py        per-hop path MTU (Trace Path MTU)
 │   │   ├── lldp_cdp.py         LLDP/CDP frames heard on the Mac's ports via BPF
 │   │   ├── dns_ptr.py          PTR lookup against the system's DNS servers
+│   │   ├── dns_check.py        DNS Check: NS/A/MX/SPF/DMARC/DKIM/PTR graded
+│   │   ├── domain_info.py      DNS Check's SSL certificate and RDAP/WHOIS registration
 │   │   ├── network_interfaces.py  active IPv4 interfaces from `ifconfig`
 │   │   └── vendor_update.py    vendor DB fetch: GitHub copy or IEEE MA-L/MA-M/MA-S CSVs
 │   ├── model/                  data model
@@ -557,6 +559,57 @@ There is no menu bar; everything else is in this menu.
   largest size that got through. A live line above shows sent / received /
   loss % / min/avg/max / echoes per second; Ping becomes Stop; Copy copies
   the text.
+- DNS Check (Ctrl+Shift+D, the sidebar's DNS Check button; not on this
+  menu) — a domain's DNS, e-mail and web records (`ping/dns_check.py`,
+  `ping/domain_info.py`, `ui/dns_check_window.py`), one window at a time.
+  Type a domain (a URL or e-mail address is cut down to it) and Check; all
+  twelve checks run side by side:
+  - NS — every nameserver is asked for the zone's SOA without recursion and
+    must answer authoritatively; one nameserver is a notice.
+  - SOA — primary NS, admin mailbox, serial and timers; each nameserver's
+    serial must match (a mismatch is a notice: a secondary is behind).
+    Timers outside RFC 1912's ranges are noted, not graded.
+  - A / AAAA; MX — each host must resolve; no MX falls back to the A record
+    (notice); null MX.
+  - Mail provider (Info) — named from MX hosts (Google Workspace, Microsoft
+    365, Proofpoint, …), SPF includes (SendGrid, Mailchimp, …) and apex
+    verification TXTs (Google, Meta, Atlassian, …).
+  - SPF — exactly one `v=spf1` record, term syntax, `+all`, `?all`/no all,
+    deprecated `ptr`, and the 10-lookup limit counted through
+    include:/redirect=.
+  - DMARC (`_dmarc.`) — p=none is a notice "Monitoring only";
+    quarantine/reject pass; rua and pct noted.
+  - DKIM (`<s>._domainkey.`) — with no selector given, ~40 common ones are
+    tried (after making sure a random selector has no key, i.e. no
+    wildcard); only revoked keys found, or none, needs input. Empty p= is
+    revoked, RSA under 1024 bits fails, under 2048 or t=y is a notice.
+  - PTR — needs the sending IP; forward-confirmed.
+  - Blocklist — the first IPv4 addresses of up to four MX hosts (plus the
+    sending IP) on six IP DNSBLs (Spamhaus ZEN, SpamCop, Barracuda, PSBL,
+    UCEPROTECT L1, Mailspike) and the domain on Spamhaus DBL and SURBL.
+    127.255.255.x (Spamhaus) and SURBL's 127.0.0.1 mean the list refuses
+    this resolver (public DNS): a notice, not a listing.
+  - SSL / HTTPS — the certificate on port 443 of the domain (or www. when
+    the domain has no address), verified by the system (truststore):
+    untrusted or expired fails, under 14 days is a notice; issuer, validity
+    and names shown.
+  - Registration — RDAP (rdap.org) or, for registries without it, WHOIS
+    over port 43 (IANA referral), walking up from a subdomain to the
+    registered name: registrar, created, expires; expired fails, under 30
+    days is a notice.
+  Statuses: Passed / Notice / Failed / Needs input / Info, each as a pill;
+  a chip per status present sits above the table ("9 Passed", "1 Notice",
+  …) beside an All checks / Needs attention (n) filter that hides the
+  passed and info rows. Notice and failed rows are tinted with a bar down
+  their left edge. Each row opens (chevron) to the records found (Copy
+  record) and notes. Add selector / Edit (DKIM) and Add IP / Change IP ask
+  for the value and re-run just that check; both are kept in
+  Settings with the last 12 domains (History). Queries go to the system's
+  DNS servers, named under the domain field. Export report (.txt or .json)
+  and Copy summary. DNS is plain UDP
+  (no EDNS: some routers answer an OPT query with nothing), retried over
+  TCP when the answer is truncated or of the wrong type (some firewalls
+  rewrite UDP DNS and answer A records whatever was asked).
 - Port Scan… (Ctrl+P, also the sidebar's Port Scan button) — which TCP and
   UDP ports one host has open (`ping/port_scanner.py`,
   `ui/port_scan_window.py`). Opens with the first selected host and scans

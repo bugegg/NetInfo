@@ -25,6 +25,13 @@ _PATHS = {
     "download": '<path d="M12 4v15M6 13l6 6 6-6"/>',
     "upload": '<path d="M12 20V5M6 11l6-6 6 6"/>',
     "copy": '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
+    "dns": '<circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/>'
+           '<path d="M10.8 7.2 6.2 16.8M13.2 7.2l4.6 9.6"/>',
+    "fail": '<circle cx="12" cy="12" r="10" fill="{c}"/><path d="m9 9 6 6M15 9l-6 6" stroke="#ffffff"/>',
+    "pending": '<circle cx="12" cy="12" r="9"/>',
+    "clock": '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    "save": '<path d="M12 3v12M7 10l5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
+    "run": '<path d="M7 4.5v15l12-7.5z"/>',
     "info": '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
     "check": '<circle cx="12" cy="12" r="10" fill="{c}"/><path d="m8 12 3 3 5-6" stroke="#ffffff"/>',
     "globe": '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
