@@ -341,7 +341,11 @@ def test_blacklist_listed(dns_server, monkeypatch):
     monkeypatch.setattr(resolver, "values", values)
     result = dns_check.check_blacklist("good.test", resolver, "8.8.8.8")
     assert result.status == dns_check.FAIL and result.summary == "Listed on 1 blocklist"
-    assert result.details == ["Listed: 8.8.8.8 on SpamCop (127.0.0.2)"]
+    assert result.details == [
+        "✓ Spamhaus ZEN (IP): Passed", "✗ SpamCop (IP): Listed 8.8.8.8 (127.0.0.2)",
+        "✓ Barracuda (IP): Passed", "✓ PSBL (IP): Passed", "✓ UCEPROTECT L1 (IP): Passed",
+        "✓ Mailspike (IP): Passed", "✓ Spamhaus DBL (domain): Passed",
+        "✓ SURBL (domain): Passed"]
 
 
 def test_provider_tables():

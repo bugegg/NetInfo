@@ -738,13 +738,34 @@ class DnsCheckWindow(QWidget):
             row.addWidget(records, 1)
             row.addWidget(copy, 0, Qt.AlignmentFlag.AlignTop)
             column.addLayout(row)
-        if result.details:
-            notes = QLabel("\n".join(result.details))
-            notes.setTextFormat(Qt.TextFormat.PlainText)
-            notes.setWordWrap(True)
-            notes.setStyleSheet(f"color: {c['muted']};")
-            notes.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            column.addWidget(notes)
+        def note(text: str) -> QLabel:
+            label = QLabel(text)
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            label.setWordWrap(True)
+            label.setStyleSheet(f"color: {c['muted']};")
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            return label
+
+        # Plain notes share one label; a line led by a DETAIL_MARKS mark gets
+        # its own row with the status icon (as in the pills) in the mark's place.
+        plain: list[str] = []
+        for line in result.details + [""]:
+            status = dns_check.DETAIL_MARKS.get(line[:1]) if line[1:2] == " " else None
+            if (status or not line) and plain:
+                column.addWidget(note("\n".join(plain)))
+                plain = []
+            if status:
+                row = QHBoxLayout()
+                row.setSpacing(6)
+                icon = QLabel()
+                color = c["muted"] if status == dns_check.INPUT else STATUS_COLORS[status]
+                icon.setPixmap(glyphs.pixmap(STATUS_GLYPHS[status], color, 14))
+                icon.setFixedWidth(14)
+                row.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+                row.addWidget(note(line[2:]), 1)
+                column.addLayout(row)
+            elif line:
+                plain.append(line)
         return widget
 
     def _toggle_item(self, item: QTreeWidgetItem, _column: int) -> None:

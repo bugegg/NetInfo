@@ -58,6 +58,9 @@ IP_BLACKLISTS = (
     ("UCEPROTECT L1", "dnsbl-1.uceprotect.net"),
     ("Mailspike", "bl.mailspike.net"),
 )
+#: A detail line starting with one of these marks and a space reports one
+#: item's own result; the window draws the matching status icon in its place.
+DETAIL_MARKS = {"✓": PASS, "✗": FAIL, "!": NOTICE, "–": INPUT}
 #: Domain blacklists asked about the domain itself.
 DOMAIN_BLACKLISTS = (("Spamhaus DBL", "dbl.spamhaus.org"), ("SURBL", "multi.surbl.org"))
 
@@ -972,13 +975,26 @@ def check_blacklist(domain: str, resolver: Resolver, ip: str = "") -> CheckResul
     checked = len(IP_BLACKLISTS) + len(DOMAIN_BLACKLISTS) - len(refused)
     records = [f"Checked {', '.join(addresses + [domain])}"]
     details = []
+    for kind, lists in (("IP", IP_BLACKLISTS), ("domain", DOMAIN_BLACKLISTS)):
+        for name, _ in lists:
+            results = [(target, found, no) for (target, list_name, _), (found, no)
+                       in zip(jobs, answers) if list_name == name]
+            hits = [f"{target} ({', '.join(found)})" for target, found, _ in results if found]
+            if hits:
+                mark, status = "✗", f"Listed {', '.join(hits)}"
+            elif not results:
+                mark, status = "–", "Not checked (no IP)"
+            elif any(no for _, _, no in results):
+                mark, status = "!", "No answer"
+            else:
+                mark, status = "✓", "Passed"
+            details.append(f"{mark} {name} ({kind}): {status}")
     if refused:
         details.append(f"No answer from {', '.join(refused)} (some lists refuse queries "
                        "from public DNS such as 8.8.8.8).")
     if listed:
         return CheckResult("blacklist", FAIL, f"Listed on {len(listed)} blocklist"
-                           f"{'s' if len(listed) != 1 else ''}", records,
-                           [f"Listed: {entry}" for entry in listed] + details)
+                           f"{'s' if len(listed) != 1 else ''}", records, details)
     if not addresses:
         return CheckResult("blacklist", NOTICE, "No mail server IP to check", records,
                            details + ["Only the domain was checked."])
