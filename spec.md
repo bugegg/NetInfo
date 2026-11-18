@@ -589,6 +589,9 @@ There is no menu bar; everything else is in this menu.
     UCEPROTECT L1, Mailspike) and the domain on Spamhaus DBL and SURBL.
     127.255.255.x (Spamhaus) and SURBL's 127.0.0.1 mean the list refuses
     this resolver (public DNS): a notice, not a listing.
+    Details give one line per list, marked ✓ Passed, ✗ Listed <ip> (<answer>),
+    ! No answer or – Not checked (no IP); the window draws each mark as the
+    matching status icon (DETAIL_MARKS), copy and export keep the mark.
   - SSL / HTTPS — the certificate on port 443 of the domain (or www. when
     the domain has no address), verified by the system (truststore):
     untrusted or expired fails, under 14 days is a notice; issuer, validity
