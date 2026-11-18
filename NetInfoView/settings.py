@@ -75,6 +75,8 @@ class Settings:
     dns_check_history: str = ""
     dns_check_selectors: str = ""
     dns_check_ip: str = ""
+    #: DNS Check's DNS server ("" for the system's).
+    dns_check_server: str = ""
 
     # -- grid ----------------------------------------------------------------
     display_mode: DisplayMode = DisplayMode.ALL

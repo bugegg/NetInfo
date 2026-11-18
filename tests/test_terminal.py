@@ -70,6 +70,52 @@ def test_menu_actions_open_the_selected_host(window, monkeypatch):
     assert window.action_ssh in window._table.actions()
 
 
+def test_open_web_opens_the_selected_host_in_the_browser(window, monkeypatch):
+    from PyQt6.QtGui import QDesktopServices
+
+    opened = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url.toString()))
+    entries = _entries_with_statuses(window, "10.0.0.7")
+    entries[0].ip_address = "10.0.0.7"
+    window._table.selectRow(0)
+
+    window.action_open_http.trigger()
+    window.action_open_https.trigger()
+    assert opened == ["http://10.0.0.7/", "https://10.0.0.7/"]
+    assert window.action_open_http in window._table.actions()
+
+
+def test_menu_hides_services_a_scanned_host_does_not_offer(window):
+    entries = _entries_with_statuses(window, "10.0.0.7")
+    entries[0].ip_address = "10.0.0.7"
+    window._table.selectRow(0)
+    services = [window.action_ssh, window.action_telnet,
+                window.action_open_http, window.action_open_https]
+
+    window._update_service_actions()  # not scanned yet: nobody knows
+    assert all(a.isVisible() for a in services)
+
+    entries[0].ports_scanned = True
+    entries[0].open_ports = [22, 443]
+    window._update_service_actions()
+    assert [a.isVisible() for a in services] == [True, False, False, True]
+    assert not window.action_rdp.isVisible()  # 3389 closed
+
+
+def test_remote_desktop_opens_an_rdp_file(window, monkeypatch):
+    from PyQt6.QtGui import QDesktopServices
+
+    opened = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url) or True)
+    entries = _entries_with_statuses(window, "10.0.0.7")
+    entries[0].ip_address = "10.0.0.7"
+    window._table.selectRow(0)
+    window.action_rdp.trigger()
+    path = opened[0].toLocalFile()
+    assert path.endswith("10.0.0.7.rdp")
+    assert open(path, encoding="utf-8").read().startswith("full address:s:10.0.0.7")
+
+
 def test_telnet_skips_automatic_login_on_macos(monkeypatch):
     """Else macOS telnet tries Kerberos and prints an error at the prompt."""
     monkeypatch.setattr(terminal, "IS_WINDOWS", False)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 import time
 
-from PyQt6.QtCore import QCoreApplication, Qt, QTimer, QUrl
+from PyQt6.QtCore import QCoreApplication, QEvent, QObject, Qt, QTimer, QUrl
 from PyQt6.QtGui import (
     QAction,
     QActionGroup,
@@ -187,6 +187,9 @@ class MainWindow(QMainWindow):
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+        # Hides the service actions a host doesn't offer before the menu shows.
+        self._table.installEventFilter(self)
+        self._table.viewport().installEventFilter(self)
         self._table.verticalHeader().setVisible(False)
         self._table.verticalHeader().setDefaultSectionSize(20)
         header = self._table.horizontalHeader()
@@ -346,6 +349,19 @@ class MainWindow(QMainWindow):
         self.action_telnet.setToolTip("Open a Telnet session to the selected host in Terminal")
         self.action_telnet.triggered.connect(self.open_telnet)
 
+        self.action_open_http = QAction("Open &HTTP", self)
+        self.action_open_http.setToolTip("Open http://<host> in the default web browser")
+        self.action_open_http.triggered.connect(lambda: self.open_web("http"))
+
+        self.action_open_https = QAction("Open HTTP&S", self)
+        self.action_open_https.setToolTip("Open https://<host> in the default web browser")
+        self.action_open_https.triggered.connect(lambda: self.open_web("https"))
+
+        self.action_rdp = QAction("Remote &Desktop", self)
+        self.action_rdp.setToolTip(
+            "Open a Remote Desktop (RDP) session to the selected host")
+        self.action_rdp.triggered.connect(self.open_rdp)
+
         self.action_snmp_test = QAction("Test SN&MP…", self)
         self.action_snmp_test.setToolTip(
             "Ask the selected host for its SNMP name and description, to check the community"
@@ -453,6 +469,29 @@ class MainWindow(QMainWindow):
         action.toggled.connect(slot)
         return action
 
+    #: The service actions on the right-click menu and the TCP port each needs.
+    def _service_actions(self) -> list[tuple[QAction, int]]:
+        return [(self.action_ssh, 22), (self.action_telnet, 23),
+                (self.action_open_http, 80), (self.action_open_https, 443),
+                (self.action_rdp, 3389)]
+
+    def _update_service_actions(self) -> None:
+        """Hide SSH/Telnet/HTTP/HTTPS for a host whose port scan found that
+        port closed. Shown when the host wasn't scanned, or its port wasn't
+        in the scanned list, since then nobody knows."""
+        entry = next((e for e in self._selected_entries() if e.ip_address), None)
+        scanned = port_scan.parse_ports(self.settings.port_scan_ports).tcp or port_scan.STATIC_PORTS
+        for action, port in self._service_actions():
+            closed = (entry is not None and entry.ports_scanned and port in scanned
+                      and port not in entry.open_ports)
+            action.setVisible(not closed)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.ContextMenu and watched in (
+                self._table, self._table.viewport()):
+            self._update_service_actions()
+        return super().eventFilter(watched, event)
+
     def _add_table_separator(self) -> None:
         """QTableView (unlike QMenu) has no addSeparator() of its own, so
         build the separator QAction by hand for its right-click menu."""
@@ -468,7 +507,6 @@ class MainWindow(QMainWindow):
         On Top, Choose Font and the Lower Pane options were dropped
         from the menu (their actions, and any shortcuts, still exist).
         """
-        self._table.addAction(self.action_properties)
         self._table.addAction(self.action_graph)
         self._table.addAction(self.action_repeat_ping)
         self._table.addAction(self.action_trace_mtu)
@@ -477,6 +515,10 @@ class MainWindow(QMainWindow):
         self._add_table_separator()
         self._table.addAction(self.action_ssh)
         self._table.addAction(self.action_telnet)
+        self._table.addAction(self.action_open_http)
+        self._table.addAction(self.action_open_https)
+        self._table.addAction(self.action_rdp)
+        self._add_table_separator()
         self._table.addAction(self.action_snmp_test)
         self._table.addAction(self.action_port_scan)
         self._add_table_separator()
@@ -840,6 +882,26 @@ class MainWindow(QMainWindow):
         ip = self._terminal_target("Telnet")
         if ip is not None:
             terminal.open_in_terminal(terminal.telnet_command(ip))
+
+    def open_web(self, scheme: str) -> None:
+        """Open the first selected host's web page in the default browser."""
+        ip = self._terminal_target(scheme.upper())
+        if ip is not None:
+            host = f"[{ip}]" if ":" in ip else ip
+            QDesktopServices.openUrl(QUrl(f"{scheme}://{host}/"))
+
+    def open_rdp(self) -> None:
+        """Open the first selected host in the system's Remote Desktop app
+        (Windows App on macOS, mstsc on Windows) through a .rdp file."""
+        ip = self._terminal_target("Remote Desktop")
+        if ip is None:
+            return
+        path = terminal.rdp_file(ip)
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            QMessageBox.warning(
+                self, "Remote Desktop",
+                "No Remote Desktop app is installed.\n"
+                "On macOS, install Windows App from the App Store.")
 
     def test_snmp(self) -> SnmpTestWindow:
         """Test SNMP against the first selected host, with the community

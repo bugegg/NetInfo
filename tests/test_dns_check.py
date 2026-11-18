@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 
 import pytest
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QInputDialog
 
 from NetInfoView.ping import ber, dns_check, domain_info
 from NetInfoView.ui import dns_check_window
@@ -129,7 +129,11 @@ def _check(port, domain="good.test", selectors=None, ip=""):
 
 def test_normalise_domain():
     assert dns_check.normalise_domain(" Example.COM ") == "example.com"
-    assert dns_check.normalise_domain("https://www.example.com/path?q=1") == "www.example.com"
+    assert dns_check.normalise_domain("https://www.example.com/path?q=1") == "example.com"
+    assert dns_check.normalise_domain("www.google.com") == "google.com"
+    assert dns_check.normalise_domain("internal.penso.co.th") == "penso.co.th"
+    assert dns_check.normalise_domain("a.b.example.com.au") == "example.com.au"
+    assert dns_check.normalise_domain("ccthailand.co.th") == "ccthailand.co.th"
     assert dns_check.normalise_domain("someone@example.com") == "example.com"
     assert dns_check.normalise_domain("bücher.de") == "xn--bcher-kva.de"
     for bad in ("", "localhost", "exa mple.com", "-bad.com", "a..com"):
@@ -282,6 +286,25 @@ def test_window_rejects_bad_input(window):  # noqa: F811
     w.domain.setText("not a domain")
     w.start()
     assert w.report is None and "is not a domain" in w.placeholder.text()
+    w.close()
+
+
+def test_dns_server_menu(window, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(window.settings, "save", lambda: None)
+    w = DnsCheckWindow(window.settings, window)
+    w._fill_dns_menu()
+    labels = [a.text() for a in w.dns_menu.actions() if not a.isSeparator()]
+    assert labels[0] == "System default" and labels[-1] == "Custom…"
+    assert "Cloudflare (1.1.1.1)" in labels
+    w.dns_menu.actions()[2].trigger()  # Cloudflare
+    assert w.server == "1.1.1.1" and window.settings.dns_check_server == "1.1.1.1"
+    assert w.dns_label.text().startswith("DNS: 1.1.1.1 (Cloudflare)")
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("10.1.1.53", True))
+    w._ask_server()
+    assert w.server == "10.1.1.53"
+    assert DnsCheckWindow(window.settings, window).server == "10.1.1.53"  # remembered
+    w.set_server("")
+    assert window.settings.dns_check_server == ""
     w.close()
 
 

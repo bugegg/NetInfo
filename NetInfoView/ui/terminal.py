@@ -240,3 +240,16 @@ def open_in_terminal(command: list[str]) -> None:
     subprocess.Popen(
         ["open", "-a", "Terminal", path, "--args", "-ApplePersistenceIgnoreState", "YES"]
     )
+
+
+def rdp_file(ip: str) -> Path:
+    """A .rdp file for `ip` in a temp folder, for the system's Remote
+    Desktop app to open (Windows App on macOS, mstsc on Windows)."""
+    ipaddress.ip_address(ip)  # only ever an address, never a setting
+    folder = Path(tempfile.gettempdir()) / "NetInfoView-rdp"
+    folder.mkdir(exist_ok=True)
+    path = folder / f"{ip.replace(':', '-')}.rdp"
+    host = f"[{ip}]" if ":" in ip else ip
+    path.write_text(f"full address:s:{host}\r\nprompt for credentials:i:1\r\n",
+                    encoding="utf-8")
+    return path
