@@ -44,9 +44,9 @@ def test_inspector_tracks_selection_and_lower_pane_visibility(window):
     assert 'Router' in window._dashboard.selection_title.text()
     assert window._history_proxy.filter_keys == {entries[0].key}
     window._toggle_history_pane(False)
-    assert window._dashboard.tabs.isHidden()
+    assert window._dashboard.inspector_collapsed
     window._toggle_history_pane(True)
-    assert not window._dashboard.tabs.isHidden()
+    assert not window._dashboard.inspector_collapsed
     window._table.clearSelection()
     assert window._dashboard.selection_title.text() == 'Select a device to inspect'
 
@@ -77,15 +77,28 @@ def test_dragging_the_sidebar_edge_collapses_and_expands_it(window):
     QTest.mouseRelease(grip, Qt.MouseButton.LeftButton, pos=QPoint(20, 100))
 
 
-def test_inspector_folds_to_its_header_and_unfolds(window):
+def test_inspector_folds_away_and_unfolds(window):
     dash = window._dashboard
     dash.pane_toggle.click()
     assert dash.inspector_collapsed and not window.settings.show_history_pane
-    assert dash.tabs.isHidden() and dash.selection_head.isHidden()
-    assert not dash.pane_toggle.isHidden()
-    dash.pane_toggle.click()
+    assert not dash.pane_open_button.isHidden()  # in the status bar
+    dash.pane_open_button.click()
     assert not dash.inspector_collapsed and window.settings.show_history_pane
-    assert not dash.tabs.isHidden()
+    assert dash.pane_open_button.isHidden()
+
+
+def test_inspector_reopens_at_its_old_height(window):
+    dash = window._dashboard
+    window.resize(1200, 900)
+    window.show()
+    splitter = window._splitter
+    total = sum(splitter.sizes())
+    splitter.setSizes([total - 333, 333])
+    dash._on_splitter_moved()
+    dash.pane_toggle.click()
+    assert splitter.sizes()[1] == 0  # the table gets all the room
+    dash.pane_open_button.click()
+    assert splitter.sizes()[1] == 333
 
 
 def test_dragging_the_divider_up_unfolds_the_inspector(window):
@@ -98,6 +111,17 @@ def test_dragging_the_divider_up_unfolds_the_inspector(window):
     splitter.setSizes([total - 300, 300])
     dash._on_splitter_moved()
     assert not dash.inspector_collapsed and window.action_show_history.isChecked()
+
+
+def test_dragging_the_divider_down_folds_the_inspector(window):
+    dash = window._dashboard
+    window.resize(1200, 800)
+    window.show()
+    splitter = window._splitter
+    total = sum(splitter.sizes())
+    splitter.setSizes([total, 0])
+    dash._on_splitter_moved()
+    assert dash.inspector_collapsed and not window.action_show_history.isChecked()
 
 
 def test_columns_menu_retains_access_to_every_existing_column(window):
@@ -251,19 +275,24 @@ def test_devices_opens_add_hosts(window):
     assert devices.menu() is None
     devices.click()
     assert opened == [True]
-    for action in (window.action_remove, window.action_clear_all, window.action_properties):
+    for action in (window.action_remove, window.action_clear_all):
         assert action in window._table.actions()
+    # Off the menu; Ctrl+I still opens it.
+    assert window.action_properties in window.actions()
 
 
 
 def test_right_click_menu_keeps_only_host_actions_and_view_toggles(window):
     names = [a.text() for a in window._table.actions() if not a.isSeparator()]
     assert names == [
-        window.action_properties.text(), window.action_graph.text(),
+        window.action_graph.text(),
         window.action_repeat_ping.text(),
         window.action_trace_mtu.text(), window.action_net_path.text(),
         window.action_route_monitor.text(),
-        window.action_ssh.text(), window.action_telnet.text(), window.action_snmp_test.text(),
+        window.action_ssh.text(), window.action_telnet.text(),
+        window.action_open_http.text(), window.action_open_https.text(),
+        window.action_rdp.text(),
+        window.action_snmp_test.text(),
         window.action_port_scan.text(),
         window.action_remove.text(), window.action_clear_all.text(),
         window.action_dark.text(), window.action_autosize.text(), window.action_about.text(),

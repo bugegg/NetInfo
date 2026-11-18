@@ -7,6 +7,7 @@ sending IP."""
 
 from __future__ import annotations
 
+import ipaddress
 import re
 
 from PyQt6.QtCore import QEvent, QSize, Qt, QThread, QTimer, pyqtSignal
@@ -22,6 +23,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPushButton,
     QStyledItemDelegate,
     QToolButton,
@@ -37,6 +39,9 @@ from .dashboard import BLUE, GREEN, RED, theme_colors
 from .threads import retire, track
 
 AMBER = "#d97706"
+#: Public DNS servers offered on the DNS menu, besides the system's own.
+PUBLIC_DNS = [("Google", "8.8.8.8"), ("Cloudflare", "1.1.1.1"), ("Quad9", "9.9.9.9"),
+              ("OpenDNS", "208.67.222.222")]
 #: Domains kept in the History menu.
 HISTORY_LIMIT = 12
 STATUS_COLORS = {dns_check.PASS: GREEN, dns_check.NOTICE: AMBER, dns_check.FAIL: RED,
@@ -165,8 +170,9 @@ class DnsCheckWindow(QWidget):
         #: Add selector / Add IP buttons and kept in Settings.
         self.selectors = getattr(settings, "dns_check_selectors", "")
         self.sending_ip = getattr(settings, "dns_check_ip", "")
-        #: The DNS server asked ("" for the system's; tests use a fake one).
-        self.server = ""
+        #: The DNS server asked ("" for the system's; tests use a fake one),
+        #: picked from the DNS menu under the domain field.
+        self.server = getattr(settings, "dns_check_server", "")
 
         # -- header: brand, what it is, History ------------------------------------
         logo = QLabel()
@@ -223,10 +229,19 @@ class DnsCheckWindow(QWidget):
         domain_row.addWidget(self.domain, 1)
         domain_row.addWidget(self.check_button)
         card_layout.addLayout(domain_row)
-        self.dns_label = QLabel()
-        self.dns_label.setObjectName("muted")
-        self.dns_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        card_layout.addWidget(self.dns_label)
+        self.dns_label = QToolButton()
+        self.dns_label.setObjectName("dnsServer")
+        self.dns_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.dns_label.setToolTip("Change the DNS server the checks ask")
+        self.dns_label.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.dns_menu = QMenu(self.dns_label)
+        self.dns_menu.aboutToShow.connect(self._fill_dns_menu)
+        self.dns_label.setMenu(self.dns_menu)
+        self.dns_label.setStyleSheet(
+            f"QToolButton#dnsServer {{ border: none; background: transparent; color: {c['muted']};"
+            f" padding: 0; }} QToolButton#dnsServer:hover {{ color: {BLUE}; }}"
+            " QToolButton#dnsServer::menu-indicator { image: none; width: 0; }")
+        card_layout.addWidget(self.dns_label, 0, Qt.AlignmentFlag.AlignRight)
         QTimer.singleShot(0, self._show_dns_servers)
 
         # -- results: title, export, chips, filter, table ----------------------------
@@ -389,7 +404,47 @@ class DnsCheckWindow(QWidget):
 
     def _show_dns_servers(self) -> None:
         servers = [self.server] if self.server else dns_check.Resolver().servers[:2]
-        self.dns_label.setText(f"DNS: {', '.join(servers)}" if servers else "DNS: none configured")
+        name = next((n for n, ip in PUBLIC_DNS if ip == self.server), "")
+        text = f"DNS: {', '.join(servers)}" if servers else "DNS: none configured"
+        self.dns_label.setText(f"{text}{f' ({name})' if name else ''} ▾")
+
+    def _fill_dns_menu(self) -> None:
+        menu = self.dns_menu
+        menu.clear()
+        choices = [("System default", "")] + [(f"{n} ({ip})", ip) for n, ip in PUBLIC_DNS]
+        if self.server and self.server not in (ip for _, ip in PUBLIC_DNS):
+            choices.append((self.server, self.server))
+        for label, server in choices:
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(server == self.server)
+            action.triggered.connect(lambda _=False, s=server: self.set_server(s))
+        menu.addSeparator()
+        menu.addAction("Custom…").triggered.connect(self._ask_server)
+
+    def _ask_server(self) -> None:
+        text, ok = QInputDialog.getText(self, "DNS server", "IP address of the DNS server to ask:",
+                                        text=self.server)
+        if not ok:
+            return
+        text = text.strip()
+        try:
+            ipaddress.ip_address(text)
+        except ValueError:
+            if text:
+                QMessageBox.warning(self, "DNS server", f"\"{text}\" is not an IP address.")
+            return
+        self.set_server(text)
+
+    def set_server(self, server: str) -> None:
+        """Ask `server` ("" for the system's DNS) from now on, and check again."""
+        self.server = server
+        self._show_dns_servers()
+        if self._settings is not None:
+            self._settings.dns_check_server = server
+        self._save()
+        if self.report is not None and self._thread is None:
+            self.start()
 
     def _inputs(self) -> tuple[str, list[str], str]:
         return self.server, dns_check.parse_selectors(self.selectors), self.sending_ip.strip()

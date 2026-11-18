@@ -552,6 +552,8 @@ class Dashboard(QWidget):
             splitter.widget(1).setParent(None)
         splitter.addWidget(self.inspector)
         splitter.setChildrenCollapsible(False)
+        # The inspector folds to nothing, its divider left to drag it back.
+        splitter.setCollapsible(1, True)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
         splitter.setSizes([600, 380])
@@ -970,6 +972,15 @@ class Dashboard(QWidget):
             "chevron", w.action_show_history, "Collapse or expand the device inspector")
         head.addWidget(self.pane_toggle)
         layout.addLayout(head)
+        #: In the status bar while the inspector is folded away: opens it.
+        self.pane_open_button = self._toggle_button(
+            "chevronup", w.action_show_history, "Show the device inspector")
+        self.pane_open_button.setObjectName("paneOpen")
+        self.pane_open_button.setFixedSize(32, 18)  # 22 + the 10px margin
+        self.pane_open_button.setVisible(False)
+        # The grip would push the chevron past the window's right edge.
+        w.statusBar().setSizeGripEnabled(False)
+        w.statusBar().addPermanentWidget(self.pane_open_button)
 
         self.tabs = QTabWidget()
         self.tabs.tabBar().setDrawBase(False)
@@ -1047,38 +1058,39 @@ class Dashboard(QWidget):
 
     # -- behaviour ---------------------------------------------------------
 
-    def _collapsed_height(self) -> int:
-        return self.inspector.minimumSizeHint().height()
-
     def set_inspector_collapsed(self, collapsed: bool) -> None:
-        """Fold the inspector down to its header bar (which keeps the
-        button to open it again), or open it back to its last height."""
+        """Fold the inspector to nothing, leaving the table every pixel (the
+        divider stays, to drag it back up, and the status bar's chevron
+        opens it), or open it back to the height it had before."""
         if collapsed == self.inspector_collapsed:
             return
         splitter = self.window._splitter
         total = sum(splitter.sizes())
-        if collapsed:
-            self._inspector_height = max(splitter.sizes()[1], 200)
+        height = splitter.sizes()[1]
+        if collapsed and height > self._min_open_height():
+            self._inspector_height = height
         self.inspector_collapsed = collapsed
-        self.tabs.setVisible(not collapsed)
-        self.selection_head.setVisible(not collapsed)
-        self.inspector.layout().setContentsMargins(0, 2 if collapsed else 8, 0, 0)
+        self.pane_open_button.setVisible(collapsed)
         # Collapsed, the table takes every pixel a window resize adds.
         splitter.setStretchFactor(1, 0 if collapsed else 2)
-        height = self._collapsed_height() if collapsed else min(self._inspector_height, total * 2 // 3)
         if total > 0:
+            height = 0 if collapsed else min(self._inspector_height, total * 2 // 3)
             splitter.setSizes([total - height, height])
         self.apply_icons()
 
+    def _min_open_height(self) -> int:
+        return self.inspector.minimumSizeHint().height() + 4
+
     def _on_splitter_moved(self, *_):
-        """Dragging the divider opens a folded inspector, and dragging an
-        open one down to its smallest folds it."""
+        """Dragging the divider down to the bottom folds the inspector, and
+        dragging it up from there opens it; the height is kept to reopen at."""
         height = self.window._splitter.sizes()[1]
         action = self.window.action_show_history
-        if self.inspector_collapsed and height > self._collapsed_height() + 24:
+        if height > self._min_open_height():
             self._inspector_height = height
+        if self.inspector_collapsed and height > 0:
             action.setChecked(True)
-        elif not self.inspector_collapsed and height <= self.inspector.minimumSizeHint().height() + 4:
+        elif not self.inspector_collapsed and height == 0:
             action.setChecked(False)
 
     def apply_icons(self) -> None:
@@ -1091,11 +1103,9 @@ class Dashboard(QWidget):
                 widget.setPixmap(glyphs.pixmap(name, color, 16))
                 continue
             size, pad = {"navButton": (16, 8), "navSelected": (16, 8),
-                         "iconToggle": (16, 0)}.get(widget.objectName(), (14, 5))
+                         "iconToggle": (16, 0), "paneOpen": (14, 0)}.get(widget.objectName(), (14, 5))
             if widget.objectName().startswith("nav") and self.sidebar_collapsed:
                 pad = 0
-            if widget is self.pane_toggle and self.inspector_collapsed:
-                name = "chevronup"
             widget.setIcon(glyphs.icon(name, color, size, pad))
             widget.setIconSize(QSize(size + pad, size))
             if isinstance(widget, MenuButton):
@@ -1316,9 +1326,13 @@ def apply_theme(window) -> None:
         QTabBar::tab:selected {{ background: {BLUE}; color: white; }}
         QSplitter::handle {{ background: {c['bg']}; }}
         QSplitter::handle:vertical {{ height: 6px; }}
+        QSplitter::handle:vertical:hover {{ background: {c['border']}; }}
         QSplitter::handle:horizontal {{ width: 10px; }}
         QStatusBar {{ padding-left: 12px; background: {c['bg']}; color: {c['muted']}; border-top: 1px solid {c['border']}; }}
         QStatusBar QLabel {{ color: {c['muted']}; padding-right: 12px; }}
+        QStatusBar QToolButton#paneOpen {{ padding: 0; margin-right: 10px; border: none;
+            background: transparent; border-radius: 4px; }}
+        QStatusBar QToolButton#paneOpen:hover {{ background: {c['hover']}; }}
         QScrollBar:vertical {{ width: 8px; background: transparent; }}
         QScrollBar::handle:vertical {{ background: {c['border']}; border-radius: 4px; min-height: 30px; }}
         QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}

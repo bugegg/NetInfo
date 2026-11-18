@@ -102,9 +102,24 @@ class Response:
         return [value for kind, value in self.answers if kind == rtype]
 
 
+#: Second-level labels that country domains register under (example.co.th,
+#: example.com.au, example.ac.uk), so the registered name keeps one more label.
+_SECOND_LEVEL = {"ac", "co", "com", "edu", "go", "gob", "gov", "gr", "in", "ltd", "mi",
+                 "mil", "ne", "net", "nic", "or", "org", "plc", "sch"}
+
+
+def registered_domain(name: str) -> str:
+    """The domain someone registered, without host labels in front
+    (internal.penso.co.th -> penso.co.th, www.google.com -> google.com)."""
+    labels = name.split(".")
+    keep = 3 if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL else 2
+    return ".".join(labels[-keep:])
+
+
 def normalise_domain(text: str) -> str:
-    """What was typed, as a bare lower-case domain ("" if it isn't one): a
-    URL or e-mail address is cut down to its domain."""
+    """What was typed, as a bare lower-case registered domain ("" if it
+    isn't one): a URL or e-mail address is cut down to its domain, and host
+    labels in front (www., mail., internal.) dropped."""
     text = text.strip().lower()
     text = re.sub(r"^[a-z][a-z0-9+.-]*://", "", text)
     text = text.split("/")[0].split("?")[0]
@@ -116,7 +131,7 @@ def normalise_domain(text: str) -> str:
     labels = text.split(".")
     if len(labels) < 2 or len(text) > 253 or not all(_LABEL.match(label) for label in labels):
         return ""
-    return text
+    return registered_domain(text)
 
 
 def build_query(name: str, qtype: int, query_id: int, recursion: bool = True) -> bytes:
