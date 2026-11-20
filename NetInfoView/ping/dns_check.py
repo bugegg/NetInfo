@@ -16,7 +16,7 @@ import random
 import re
 import socket
 import struct
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 
 from . import ber
@@ -36,10 +36,11 @@ PASS, NOTICE, FAIL, INPUT, ERROR, INFO = "pass", "notice", "fail", "input", "err
 STATUS_LABELS = {PASS: "Passed", NOTICE: "Notice", FAIL: "Failed", INPUT: "Needs input",
                  ERROR: "Error", INFO: "Info"}
 #: The checks in the order shown.
-CHECKS = ("ns", "soa", "address", "mx", "provider", "spf", "dmarc", "dkim", "ptr", "blacklist",
-          "ssl", "whois")
+CHECKS = ("ns", "soa", "address", "mx", "provider", "spf", "dmarc", "dkim", "mta_sts", "tlsrpt",
+          "ptr", "blacklist", "ssl", "whois")
 CHECK_TITLES = {"ns": "NS", "soa": "SOA", "address": "A / AAAA", "mx": "MX",
                 "provider": "Mail provider", "spf": "SPF", "dmarc": "DMARC", "dkim": "DKIM",
+                "mta_sts": "MTA-STS", "tlsrpt": "TLS-RPT",
                 "ptr": "PTR", "blacklist": "Blocklist", "ssl": "SSL / HTTPS",
                 "whois": "Registration"}
 #: Selectors tried when none is given: the big mail services' defaults.
@@ -322,6 +323,9 @@ class Report:
     domain: str
     results: list[CheckResult] = field(default_factory=list)
     server: str = ""
+    #: False when DNS says the domain doesn't exist (NXDOMAIN): nothing else
+    #: is checked.
+    exists: bool = True
 
     def counts(self) -> dict[str, int]:
         counts = dict.fromkeys(STATUS_LABELS, 0)
@@ -1002,6 +1006,34 @@ def check_blacklist(domain: str, resolver: Resolver, ip: str = "") -> CheckResul
                        f"Not listed in {checked} checked lists", records, details)
 
 
+def check_tlsrpt(domain: str, resolver: Resolver) -> CheckResult:
+    """TLS-RPT (RFC 8460): where senders report failed TLS deliveries."""
+    name = f"_smtp._tls.{domain}"
+    try:
+        records = [t for t in resolver.txt(name)
+                   if t.lower().replace(" ", "").startswith("v=tlsrptv1")]
+    except DnsError as error:
+        return _failed_lookup("tlsrpt", error)
+    if not records:
+        return CheckResult("tlsrpt", NOTICE, "No TLS-RPT record",
+                           details=[f"Add a TXT record at {name}, e.g. "
+                                    "\"v=TLSRPTv1; rua=mailto:tls-reports@…\", to hear about "
+                                    "mail that couldn't be delivered over TLS."])
+    if len(records) > 1:
+        return CheckResult("tlsrpt", FAIL, "Multiple TLS-RPT records", records,
+                           ["Senders ignore TLS-RPT when there's more than one record."])
+    rua = parse_tags(records[0]).get("rua", "")
+    targets = [t.strip() for t in rua.split(",") if t.strip()]
+    if not targets:
+        return CheckResult("tlsrpt", FAIL, "No rua= report address", records)
+    bad = [t for t in targets if not t.lower().startswith(("mailto:", "https:"))]
+    if bad:
+        return CheckResult("tlsrpt", FAIL, "rua= must be mailto: or https:", records,
+                           [f"Not valid: {', '.join(bad)}"])
+    shown = [t[len("mailto:"):] if t.lower().startswith("mailto:") else t for t in targets]
+    return CheckResult("tlsrpt", PASS, "Reports to " + ", ".join(shown), records)
+
+
 def run_check(key: str, domain: str, resolver: Resolver, selectors: list[str] | None = None,
               ip: str = "") -> CheckResult:
     from . import domain_info
@@ -1019,6 +1051,10 @@ def run_check(key: str, domain: str, resolver: Resolver, selectors: list[str] | 
             return domain_info.check_ssl(domain, resolver)
         if key == "whois":
             return domain_info.check_registration(domain)
+        if key == "mta_sts":
+            return domain_info.check_mta_sts(domain, resolver)
+        if key == "tlsrpt":
+            return check_tlsrpt(domain, resolver)
         if key == "address":
             return check_address(domain, resolver)
         if key == "mx":
@@ -1033,6 +1069,11 @@ def run_check(key: str, domain: str, resolver: Resolver, selectors: list[str] | 
             return check_ptr(resolver, ip)
     except DnsError as error:
         return _failed_lookup(key, error)
+    except Exception as error:  # noqa: BLE001 - one broken check mustn't stall the rest
+        if key not in CHECKS:
+            raise
+        return CheckResult(key, ERROR, "Check failed",
+                           details=[f"{type(error).__name__}: {error}"])
     raise KeyError(key)
 
 
@@ -1041,10 +1082,25 @@ def parse_selectors(text: str) -> list[str]:
 
 
 def check_domain(domain: str, server: str = "", selectors: list[str] | None = None,
-                 ip: str = "", timeout: float = DEFAULT_TIMEOUT, port: int = DNS_PORT) -> Report:
-    """Every check for `domain`, run side by side."""
+                 ip: str = "", timeout: float = DEFAULT_TIMEOUT, port: int = DNS_PORT,
+                 on_result=None) -> Report:
+    """Every check for `domain`, run side by side. `on_result` is called
+    with each CheckResult as soon as it's ready (from a worker thread)."""
     resolver = Resolver([server] if server else None, timeout, port)
+    try:
+        missing = resolver.resolve(domain, "NS").rcode == RCODE_NXDOMAIN
+    except DnsError:
+        missing = False  # each check reports the lookup failure itself
+    if missing:
+        return Report(domain=domain, results=[check_ns(domain, resolver)], server=server,
+                      exists=False)
+    found: dict[str, CheckResult] = {}
     with ThreadPoolExecutor(max_workers=len(CHECKS)) as pool:  # slowest: whois, blacklists
-        results = list(pool.map(
-            lambda key: run_check(key, domain, resolver, selectors, ip), CHECKS))
-    return Report(domain=domain, results=results, server=server)
+        futures = [pool.submit(run_check, key, domain, resolver, selectors, ip)
+                   for key in CHECKS]
+        for future in as_completed(futures):
+            result = future.result()
+            found[result.key] = result
+            if on_result is not None:
+                on_result(result)
+    return Report(domain=domain, results=[found[key] for key in CHECKS], server=server)

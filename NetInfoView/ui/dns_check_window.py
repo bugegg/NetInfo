@@ -54,6 +54,7 @@ ATTENTION = (dns_check.NOTICE, dns_check.FAIL, dns_check.ERROR, dns_check.INPUT)
 
 
 class DnsCheckThread(QThread):
+    result = pyqtSignal(object)  # dns_check.CheckResult, each as it's ready
     done = pyqtSignal(object)  # dns_check.Report
 
     def __init__(self, domain: str, server: str, selectors: list[str], ip: str,
@@ -63,7 +64,8 @@ class DnsCheckThread(QThread):
 
     def run(self) -> None:
         domain, server, selectors, ip, port = self._args
-        self.done.emit(dns_check.check_domain(domain, server, selectors, ip, port=port))
+        self.done.emit(dns_check.check_domain(domain, server, selectors, ip, port=port,
+                                              on_result=self.result.emit))
 
 
 class SingleCheckThread(QThread):
@@ -465,6 +467,7 @@ class DnsCheckWindow(QWidget):
         self.check_button.setText("Checking…")
         self._show_pending(domain)
         self._thread = track(DnsCheckThread(domain, server, selectors, ip, self.dns_port))
+        self._thread.result.connect(self._show_live)
         self._thread.done.connect(self._show_report)
         self._thread.start()
 
@@ -487,16 +490,50 @@ class DnsCheckWindow(QWidget):
             self._style_title(item)
             self._set_pill(item, None)
             self._items[key] = item
+        #: Results shown so far, while the check runs.
+        self._live = dns_check.Report(domain)
+
+    def _show_live(self, result: dns_check.CheckResult) -> None:
+        """One check has finished: show it in its row straight away."""
+        live = getattr(self, "_live", None)
+        if live is None or self._thread is None or live.result(result.key) is not None:
+            return
+        live.results.append(result)
+        old = self._items.get(result.key)
+        index = self.tree.indexOfTopLevelItem(old) if old is not None else -1
+        if index >= 0:
+            self._take_row(index)
+        self._add_result(result, index if index >= 0 else None)
+        self._update_counts(live, pending=len(dns_check.CHECKS) - len(live.results))
+        self._apply_filter()
 
     def _show_report(self, report: dns_check.Report) -> None:
         self._thread = None
         self.check_button.setEnabled(True)
         self.check_button.setText("Run checks")
         self.report = report
-        self.tree.clear()
-        self._items.clear()
+        live, self._live = getattr(self, "_live", None), None
+        if not report.exists:
+            self.tree.clear()
+            self._items.clear()
+            self._message(f"{report.domain} doesn't exist.\n\n"
+                          "DNS has no record of this domain (NXDOMAIN): check the spelling, "
+                          "or it may have expired or never been registered.")
+            self.footer_note.setText(f"Checked {report.domain}: not found")
+            for button in (self.copy_button, self.export_button):
+                button.setEnabled(False)
+            return
+        # Rows already shown as they came in stay as they are (and stay open
+        # if they were opened); any missing are filled in.
+        shown = {r.key for r in live.results} if live is not None else set()
         for result in report.results:
-            self._add_result(result)
+            if result.key in shown and result.key in self._items:
+                continue
+            old = self._items.get(result.key)
+            index = self.tree.indexOfTopLevelItem(old) if old is not None else -1
+            if index >= 0:
+                self._take_row(index)
+            self._add_result(result, index if index >= 0 else None)
         self._update_counts()
         self._apply_filter()
         self._update_expand_button()
@@ -508,14 +545,18 @@ class DnsCheckWindow(QWidget):
     # -- chips and filter ----------------------------------------------------------
 
     def chip_texts(self) -> list[str]:
-        return [chip.property("chipText") for chip in self.counts.findChildren(QFrame, "chip")]
+        return [chip.property("chipText") for chip in self.counts.findChildren(QFrame, "chip")
+                if not chip.property("removed")]  # replaced, awaiting deleteLater
 
     def _set_chips(self, chips: list[tuple[str, str, str, str]]) -> None:
         """Replace the chips: each (text, colour, glyph, background colour)."""
         while self._chips.count():
             widget = self._chips.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
+                # Not setParent(None): that makes the chip a window of its
+                # own for a moment, and macOS then activates the main window.
+                widget.setProperty("removed", True)
+                widget.hide()
                 widget.deleteLater()
         for text, color, glyph, background in chips:
             chip = QFrame()
@@ -532,8 +573,8 @@ class DnsCheckWindow(QWidget):
             row.addWidget(QLabel(text))
             self._chips.addWidget(chip)
 
-    def _update_counts(self) -> None:
-        counts = self.report.counts()
+    def _update_counts(self, report: dns_check.Report | None = None, pending: int = 0) -> None:
+        counts = (report or self.report).counts()
         failed = counts[dns_check.FAIL] + counts[dns_check.ERROR]
         chips = []
         for count, label, status in (
@@ -546,6 +587,9 @@ class DnsCheckWindow(QWidget):
             if count or status == dns_check.PASS:
                 color, background = self._pill_colors(status)
                 chips.append((f"{count} {label}", color, STATUS_GLYPHS[status], background))
+        if pending:
+            muted = self._colors["muted"]
+            chips.append((f"Checking {pending}…", muted, "pending", rgba(muted, 0.14)))
         self._set_chips(chips)
         attention = sum(counts[s] for s in ATTENTION)
         self.show_attention.setText(f"Needs attention ({attention})" if attention
@@ -553,8 +597,9 @@ class DnsCheckWindow(QWidget):
 
     def _apply_filter(self) -> None:
         only_attention = self.show_attention.isChecked()
+        report = getattr(self, "_live", None) or self.report  # live while checking
         for key, item in self._items.items():
-            result = self.report.result(key) if self.report else None
+            result = report.result(key) if report else None
             item.setHidden(bool(only_attention and result and result.status not in ATTENTION))
 
     # -- rows ----------------------------------------------------------------------
@@ -598,6 +643,18 @@ class DnsCheckWindow(QWidget):
         font.setBold(True)
         _grow(font, 0)
         item.setFont(COL_CHECK, font)
+
+    def _take_row(self, index: int) -> None:
+        """Remove a row and delete its widgets (pill, button, details) first:
+        taken with them still set, they briefly turn into windows of their
+        own, and on macOS that hands focus to the main window, which jumps
+        in front of this one."""
+        item = self.tree.topLevelItem(index)
+        for row in [item] + [item.child(i) for i in range(item.childCount())]:
+            for column in range(self.tree.columnCount()):
+                if self.tree.itemWidget(row, column) is not None:
+                    self.tree.removeItemWidget(row, column)
+        self.tree.takeTopLevelItem(index)
 
     def _add_result(self, result: dns_check.CheckResult, index: int | None = None) -> None:
         item = QTreeWidgetItem([result.title, "", result.summary, "", ""])
@@ -849,13 +906,13 @@ class DnsCheckWindow(QWidget):
 
     def _show_single(self, result: dns_check.CheckResult) -> None:
         self._single.pop(result.key, None)
-        if self.report is None:
-            return
+        if self.report is None or self._thread is not None:
+            return  # a full check has started since: it brings its own result
         self.report.results = [result if r.key == result.key else r for r in self.report.results]
         old = self._items.get(result.key)
         index = self.tree.indexOfTopLevelItem(old) if old is not None else -1
         if index >= 0:
-            self.tree.takeTopLevelItem(index)
+            self._take_row(index)
         self._add_result(result, index if index >= 0 else None)
         self._update_counts()
         self._apply_filter()

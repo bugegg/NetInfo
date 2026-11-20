@@ -396,6 +396,9 @@ def test_button_opens_the_interface_picker(qapp, tmp_path, monkeypatch):
         "NetInfoView.fileio.vendor_db.default_db_path", lambda: tmp_path / "v.sqlite"
     )
     monkeypatch.setattr(lldp_cdp_window, "ethernet_interfaces", lambda: [_iface("en7")])
+    started = []
+    monkeypatch.setattr(lldp_cdp_window.LldpCdpWindow, "start",
+                        lambda self: started.append(self.interface.currentData()))
     win = MainWindow(Settings())
     try:
         assert win.action_lldp_cdp not in win._table.actions()  # Discovery opens it
@@ -404,12 +407,14 @@ def test_button_opens_the_interface_picker(qapp, tmp_path, monkeypatch):
         )
         discovery.click()  # opens the window straight away, no host selected: fine
         window = win._lldp_cdp_window
-        assert window is not None and window.isVisible() and not window.running
+        assert window is not None and window.isVisible()
         assert window.interface.currentData() == "en7"
+        assert started == ["en7"]  # and checks straight away
         monkeypatch.setattr(lldp_cdp_window, "ethernet_interfaces",
                             lambda: [_iface("en7"), _iface("en10")])
         assert win.check_lldp_cdp() is window  # same window, list refreshed
         assert window.interface.count() == 2
+        assert started == ["en7", "en7"]  # checked again
         window.close()
     finally:
         win.close()

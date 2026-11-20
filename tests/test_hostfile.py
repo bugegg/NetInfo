@@ -157,3 +157,11 @@ def test_the_range_limit_setting_is_clamped():
     assert Settings().max_range_addresses == 256
     assert Settings(max_range_addresses=0).sanitised().max_range_addresses == 1
     assert Settings(max_range_addresses=10**9).sanitised().max_range_addresses == 16_777_216
+
+
+def test_is_valid_host():
+    from NetInfoView.fileio.hostfile import is_valid_host
+    for good in ("192.168.1.1", "::1", "fe80::1%en0", "google.com", "router", "printer.local"):
+        assert is_valid_host(good), good
+    for bad in ("192.168.1.300", "10.0.0", "1.2.3.4.5", "bad_host!", "-x.com", "a..b", ""):
+        assert not is_valid_host(bad), bad
