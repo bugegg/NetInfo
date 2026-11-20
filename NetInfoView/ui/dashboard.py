@@ -16,9 +16,9 @@ from PyQt6.QtGui import (
     QAction, QColor, QFont, QFontInfo, QKeySequence, QPainter, QPainterPath, QPen,
 )
 from PyQt6.QtWidgets import (
-    QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton,
+    QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy, QSpacerItem, QSplitter, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget,
-    QToolButton, QVBoxLayout, QWidget,
+    QToolButton, QToolTip, QVBoxLayout, QWidget,
 )
 
 from .. import __version__
@@ -674,11 +674,11 @@ class Dashboard(QWidget):
         self.nav_settings = self._tool_button("Settings", "settings", "navButton", w.action_options)
         nav.addWidget(self.nav_settings)
         nav.addStretch()
-        # Both kinds of update in one place: the app itself, and the MAC
+        # Both kinds of update in one window: the app itself, and the MAC
         # vendor list it names devices with.
-        self.nav_updates = self._menu_button("Check for updates", "update", (
-            w.action_check_updates, w.action_update_vendor_db,
-        ), "navButton")
+        updates = QAction("Check for updates", self)
+        updates.triggered.connect(w.show_updates)
+        self.nav_updates = self._tool_button("Check for updates", "update", "navButton", updates)
         nav.addWidget(self.nav_updates)
 
         line = QFrame()
@@ -800,9 +800,13 @@ class Dashboard(QWidget):
         summary = QFrame()
         summary.setObjectName("card")
         row = QHBoxLayout(summary)
-        row.setContentsMargins(16, 8, 16, 8)
+        row.setContentsMargins(6, 4, 16, 4)
         row.setSpacing(0)
         self.stats = []
+        #: The devices / online / offline tiles double as the All / Online /
+        #: Offline filter.
+        self.stat_buttons = {}
+        modes = (DisplayMode.ALL, DisplayMode.SUCCEEDED, DisplayMode.FAILED)
         for i, (name, mark) in enumerate((("devices", "devices"), ("online", GREEN),
                                            ("offline", RED), ("avg. latency", "activity"))):
             if i:
@@ -810,7 +814,19 @@ class Dashboard(QWidget):
                 rule.setObjectName("vrule")
                 rule.setFixedWidth(1)
                 row.addWidget(rule)
-            cell = QHBoxLayout()
+            if i < len(modes):
+                tile = QPushButton()
+                tile.setObjectName("statTile")
+                tile.setCheckable(True)
+                tile.setCursor(Qt.CursorShape.PointingHandCursor)
+                tile.setToolTip(f"Show {'all devices' if i == 0 else name + ' devices only'}")
+                tile.clicked.connect(lambda checked, m=modes[i]: self.window._set_display_mode(m))
+                self.stat_buttons[modes[i]] = tile
+                cell = QHBoxLayout(tile)
+                cell.setContentsMargins(10, 4, 10, 4)
+            else:
+                tile = None
+                cell = QHBoxLayout()
             cell.setSpacing(7)
             cell.addStretch()
             marker = QLabel()
@@ -825,7 +841,10 @@ class Dashboard(QWidget):
             cell.addWidget(value)
             cell.addWidget(label(name, "statCaption"))
             cell.addStretch()
-            row.addLayout(cell, 1)
+            if tile is not None:
+                row.addWidget(tile, 1)
+            else:
+                row.addLayout(cell, 1)
         return summary
 
     def _build_filters(self) -> QHBoxLayout:
@@ -836,10 +855,25 @@ class Dashboard(QWidget):
         self.search.setObjectName("search")
         self.search.setPlaceholderText("Search by hostname, IP or MAC")
         self.search.setClearButtonEnabled(True)
-        self.search.setMinimumWidth(200)
+        self.search.setMinimumWidth(140)
         self.search.textChanged.connect(self.search_changed)
         self._search_action = self.search.addAction(glyphs.icon("search", "#888"),
                                                     QLineEdit.ActionPosition.LeadingPosition)
+
+        # Quick add: type hosts, press Return.
+        self.quick_add = QLineEdit()
+        self.quick_add.setObjectName("search")
+        self.quick_add.setPlaceholderText("Add host… (IP, name, range, CIDR)")
+        self.quick_add.setToolTip("Add hosts without the Add Hosts dialog. Separate several\n"
+                                  "with spaces or commas, e.g. 8.8.8.8, 192.168.1.1-20, 10.0.0.0/28")
+        self.quick_add.setMinimumWidth(200)
+        self.quick_add.returnPressed.connect(self._quick_add)
+        self.quick_add.textEdited.connect(lambda: self._quick_add_error(""))
+        self._quick_add_action = self.quick_add.addAction(
+            glyphs.icon("plus", "#888"), QLineEdit.ActionPosition.LeadingPosition)
+        self._quick_add_action.triggered.connect(self._quick_add)
+        # Quick add first and wider; search after it.
+        filters.addWidget(self.quick_add, 3)
         filters.addWidget(self.search, 1)
 
         segment = QFrame()
@@ -1111,6 +1145,42 @@ class Dashboard(QWidget):
             if isinstance(widget, MenuButton):
                 widget.chevron_color = colors["ink"]
         self._search_action.setIcon(glyphs.icon("search", colors["muted"]))
+        self._quick_add_action.setIcon(glyphs.icon("plus", colors["muted"]))
+        # The table's right-click menu, in the sidebar's outline style.
+        w = self.window
+        for action, name in ((w.action_graph, "chart"), (w.action_repeat_ping, "repeatping"),
+                             (w.action_trace_mtu, "mtu"), (w.action_net_path, "netpath"),
+                             (w.action_route_monitor, "ping"), (w.action_ssh, "terminal"),
+                             (w.action_telnet, "telnet"), (w.action_open_http, "globe"),
+                             (w.action_open_https, "lock"), (w.action_rdp, "devices"),
+                             (w.action_snmp_test, "server"), (w.action_port_scan, "portscan"),
+                             (w.action_remove, "trash"), (w.action_clear_all, "clearall"),
+                             (w.action_dark, "moon"), (w.action_autosize, "autosize"),
+                             (w.action_about, "info")):
+            action.setIcon(glyphs.icon(name, colors["ink"], 16))
+
+    def _quick_add(self) -> None:
+        text = self.quick_add.text().strip()
+        if not text:
+            return
+        added, error = self.window.quick_add_hosts(text)
+        if error:
+            self._quick_add_error(error, tip=False)  # red border; the alert says why
+            QMessageBox.warning(self.window, "Add host", error)
+            self.quick_add.setFocus()
+            self.quick_add.selectAll()
+        else:
+            self.quick_add.clear()
+            if not added:
+                self._quick_add_error("Already in the list")
+
+    def _quick_add_error(self, message: str, tip: bool = True) -> None:
+        self.quick_add.setProperty("error", bool(message))
+        if message and tip:
+            QToolTip.showText(self.quick_add.mapToGlobal(self.quick_add.rect().bottomLeft()),
+                              message, self.quick_add)
+        self.quick_add.style().unpolish(self.quick_add)
+        self.quick_add.style().polish(self.quick_add)
 
     def search_changed(self, text):
         self.window._proxy.set_search_text(text)
@@ -1181,8 +1251,9 @@ class Dashboard(QWidget):
         running = w._engine is not None
         self.start_button.setVisible(not running)
         self.stop_button.setVisible(running)
-        for mode, button in self.filter_buttons.items():
-            button.setChecked(w._proxy.display_mode is mode)
+        for buttons in (self.filter_buttons, self.stat_buttons):
+            for mode, button in buttons.items():
+                button.setChecked(w._proxy.display_mode is mode)
 
         selected = w._selected_entries()
         single = len(selected) == 1
@@ -1255,6 +1326,7 @@ def apply_theme(window) -> None:
         QDialog, QMenu {{ background: {c['surface']}; }}
         QMenu {{ border: 1px solid {c['border']}; padding: 4px; }}
         QMenu::item {{ padding: 5px 18px 5px 18px; border-radius: 4px; }}
+        QMenu::icon {{ padding-left: 8px; }}
         QMenu::item:selected {{ background: {c['select']}; color: {c['selected_ink']}; }}
         QMenu::separator {{ height: 1px; background: {c['border']}; margin: 4px 8px; }}
         QComboBox#chartRange {{ background: {c['hover']}; border: none; border-radius: 5px; padding: 2px 4px 2px 8px; }}
@@ -1272,6 +1344,10 @@ def apply_theme(window) -> None:
         QLabel#dotOffline {{ color: {RED}; font-size: 11px; }}
         QLabel#dotIdle {{ color: {IDLE_DOT}; font-size: 11px; }}
         QLabel#dotBlinkOff {{ color: transparent; font-size: 11px; }}
+        QPushButton#statTile {{ border: none; background: transparent; border-radius: 6px;
+            margin: 0 4px; }}
+        QPushButton#statTile:hover {{ background: {c['hover']}; }}
+        QPushButton#statTile:checked {{ background: {c['nav']}; }}
         QLabel#stat {{ font-size: 16px; font-weight: 700; }}
         QLabel#statCaption {{ color: {c['muted']}; font-size: 12px; }}
         QLabel#selectionTitle {{ font-size: 14px; font-weight: 700; }}
@@ -1307,6 +1383,7 @@ def apply_theme(window) -> None:
             padding: 5px 6px 5px 2px; font-size: 12px; color: {c['ink']};
             selection-background-color: {BLUE}; }}
         QLineEdit#search:focus {{ border-color: {BLUE}; }}
+        QLineEdit#search[error="true"] {{ border-color: {RED}; }}
         QTableView {{ background: {c['surface']}; color: {c['ink']}; border: 1px solid {c['border']};
             border-radius: 8px; selection-background-color: {c['select']};
             selection-color: {c['selected_ink']}; outline: 0; font-size: 12px; }}

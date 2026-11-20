@@ -37,6 +37,18 @@ _PATHS = {
     "globe": '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
     "link": '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
     "close": '<path d="M18 6 6 18M6 6l12 12"/>',
+    "plus": '<path d="M12 5v14M5 12h14"/>',
+    "chart": '<path d="M3 3v18h18"/><path d="m7 14 4-4 3 3 6-6"/>',
+    "terminal": '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3M12 15h5"/>',
+    "telnet": '<path d="m4 7 5 5-5 5M12 19h8"/>',
+    "lock": '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    "server": '<rect x="3" y="3" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/>'
+              '<path d="M7 6.5h.01M7 17.5h.01"/>',
+    "trash": '<path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>'
+             '<path d="M10 11v6M14 11v6"/>',
+    "clearall": '<path d="M3 6h13M3 12h9M3 18h7"/><path d="m15 14 6 6M21 14l-6 6"/>',
+    "moon": '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/>',
+    "autosize": '<path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4"/>',
     "laptop": '<rect x="4" y="4" width="16" height="11" rx="1.5"/><path d="M2 19h20l-1.5-2.5h-17z"/>',
     "wifi": '<path d="M2 8.8a15 15 0 0 1 20 0M5 12.4a10 10 0 0 1 14 0M8.5 15.9a5 5 0 0 1 7 0"/>'
             '<circle cx="12" cy="19.2" r="1.3" fill="{c}"/>',

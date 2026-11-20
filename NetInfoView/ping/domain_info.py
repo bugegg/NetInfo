@@ -5,15 +5,17 @@ registries without RDAP (many country domains, .th among them)."""
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import socket
 import ssl
 import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 
 from . import ber, tls_cert, whois
-from .dns_check import FAIL, INFO, NOTICE, PASS, CheckResult, Resolver
+from .dns_check import FAIL, INFO, NOTICE, PASS, CheckResult, DnsError, Resolver, parse_tags
 from ..https import ssl_context, urlopen
 
 HTTPS_PORT = 443
@@ -127,6 +129,113 @@ def check_ssl(domain: str, resolver: Resolver, now: datetime | None = None) -> C
     if days < CERT_WARN_DAYS:
         return CheckResult("ssl", NOTICE, f"Certificate expires in {days} days", records, details)
     return CheckResult("ssl", PASS, f"Certificate expires in {days} days", records, details)
+
+
+# -- MTA-STS ----------------------------------------------------------------------
+
+MTA_STS_TIMEOUT = 8.0
+
+
+def parse_sts_policy(text: str) -> dict[str, list[str]]:
+    """An MTA-STS policy file ("key: value" lines) as key -> values."""
+    policy: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            policy.setdefault(key.strip().lower(), []).append(value.strip())
+    return policy
+
+
+def mx_matches(host: str, patterns: list[str]) -> bool:
+    """Whether an MX host fits one of a policy's mx: patterns ("*." matches
+    one label)."""
+    host = host.lower().rstrip(".")
+    for pattern in patterns:
+        pattern = pattern.lower().rstrip(".")
+        if pattern.startswith("*."):
+            if host.endswith(pattern[1:]) and host.count(".") == pattern.count("."):
+                return True
+        elif host == pattern:
+            return True
+    return False
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """RFC 8461 §3.3: a policy fetch must not follow redirects; a 3xx then
+    surfaces as an HTTPError."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def fetch_sts_policy(domain: str) -> str:
+    """The policy file's text. Raises URLError (HTTPError for anything but
+    200, redirects included) or ValueError if it isn't text/plain."""
+    url = f"https://mta-sts.{domain}/.well-known/mta-sts.txt"
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=ssl_context()), _NoRedirect())
+    with opener.open(url, timeout=MTA_STS_TIMEOUT) as response:
+        if response.status != 200:
+            raise ValueError(f"HTTP {response.status}, not 200")
+        kind = response.headers.get_content_type()
+        if kind != "text/plain":
+            raise ValueError(f"served as {kind}, not text/plain")
+        return response.read(64 * 1024).decode("utf-8", "replace")
+
+
+def check_mta_sts(domain: str, resolver: Resolver) -> CheckResult:
+    """MTA-STS (RFC 8461): the TXT record, then the policy file it announces."""
+    name = f"_mta-sts.{domain}"
+    records = [t for t in resolver.txt(name) if t.lower().replace(" ", "").startswith("v=stsv1")]
+    if not records:
+        return CheckResult("mta_sts", NOTICE, "No MTA-STS",
+                           details=["Without MTA-STS, mail sent to this domain can fall back "
+                                    "to no encryption if TLS is blocked.",
+                                    f"Publish a TXT record at {name} (\"v=STSv1; id=…\") and "
+                                    f"a policy at https://mta-sts.{domain}/.well-known/mta-sts.txt."])
+    if len(records) > 1:
+        return CheckResult("mta_sts", FAIL, "Multiple MTA-STS records", records)
+    if not parse_tags(records[0]).get("id"):
+        return CheckResult("mta_sts", FAIL, "Record has no id=", records)
+    url = f"https://mta-sts.{domain}/.well-known/mta-sts.txt"
+    try:
+        policy = parse_sts_policy(fetch_sts_policy(domain))
+    except urllib.error.HTTPError as error:
+        reason = (f"redirects to {error.headers.get('Location', '?')} (not allowed)"
+                  if 300 <= error.code < 400 else f"HTTP {error.code} {error.reason}")
+        return CheckResult("mta_sts", FAIL, "Policy file unreachable", records,
+                           [f"{url}: {reason}"])
+    except ValueError as error:
+        return CheckResult("mta_sts", FAIL, "Policy file is invalid", records,
+                           [f"{url}: {error}"])
+    except (urllib.error.URLError, OSError, ssl.SSLError, http.client.HTTPException) as error:
+        reason = getattr(error, "reason", None) or error
+        return CheckResult("mta_sts", FAIL, "Policy file unreachable", records,
+                           [f"{url}: {reason}"])
+    mode = (policy.get("mode") or [""])[0].lower()
+    patterns = policy.get("mx", [])
+    max_age = (policy.get("max_age") or [""])[0]
+    records = records + [f"mode: {mode or '?'}"] + [f"mx: {p}" for p in patterns] + (
+        [f"max_age: {max_age}"] if max_age else [])
+    if (policy.get("version") or [""])[0] != "STSv1" or mode not in ("enforce", "testing", "none"):
+        return CheckResult("mta_sts", FAIL, "Policy file is invalid", records,
+                           [f"{url} needs version: STSv1 and mode: enforce, testing or none."])
+    details = [f"Policy: {url}"]
+    try:
+        unmatched = [host for _, host in resolver.values(domain, "MX")
+                     if host and not mx_matches(host, patterns)]
+    except DnsError:
+        unmatched = []
+    if unmatched:
+        details.insert(0, f"✗ Not in the policy: {', '.join(unmatched)}")
+        if mode == "enforce":
+            return CheckResult("mta_sts", FAIL, "Policy doesn't cover every MX", records, details)
+    if mode == "enforce":
+        return CheckResult("mta_sts", PASS, "Enforced", records, details)
+    if mode == "testing":
+        return CheckResult("mta_sts", NOTICE, "Testing mode only", records,
+                           ["Failures are only reported, not enforced."] + details)
+    return CheckResult("mta_sts", NOTICE, "Policy is mode: none", records, details)
 
 
 # -- registration ----------------------------------------------------------------

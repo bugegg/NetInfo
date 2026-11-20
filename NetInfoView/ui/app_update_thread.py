@@ -32,6 +32,11 @@ class UpdateDownloadThread(QThread):
         super().__init__()
         self._release = release
 
+    @property
+    def release(self) -> Release:
+        """The release being downloaded."""
+        return self._release
+
     def run(self) -> None:  # noqa: D102 - QThread entry point
         try:
             new_app: Path = download_and_extract(self._release)  # .app or installer

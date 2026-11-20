@@ -120,7 +120,6 @@ def test_window_runs_a_test_end_to_end(qapp, server, monkeypatch):  # noqa: F811
     assert w.card_down.value.text() != "–" and w.card_up.value.text() != "–"
     assert w.history.topLevelItemCount() == 1
     assert w.copy_button.isEnabled()
-    assert w.graph.series["download"] and w.graph.series["upload"]
     w.close()
 
 
@@ -402,34 +401,6 @@ def test_nearest_ookla_ignores_unreachable_and_other_kinds():
     assert speedtest.nearest_ookla(ranked) == [(c, 12.0)]
     assert speedtest.nearest_ookla(ranked, 5) == [(c, 12.0), (a, 30.0)]
     assert speedtest.nearest_ookla([(b, None)]) == []
-
-
-def test_graph_reads_the_clock_and_shows_the_hovered_reading(qapp):
-    from PyQt6.QtCore import QPointF
-
-    from NetInfoView.ui.speedtest_window import LiveGraph, _clock
-
-    g = LiveGraph()
-    g.resize(800, 240)
-    g.reset(10.0)
-    g.begin("download")
-    start = g.phase_start["download"]
-    for i in range(1, 101):
-        g.add("download", i / 10, 300.0 if i < 50 else 500.0)
-    g.grab()  # paint once, so the panes are laid out
-    plot = g._plots["download"]
-    # Over the pane at 8 s into the download: the 500 Mbps reading there.
-    g.hover = QPointF(plot.left() + plot.width() * 0.8, plot.center().y())
-    phase, when, value = g.hovered()
-    assert phase == "download" and value == 500.0
-    assert when == pytest.approx(start + 8.0, abs=0.06)
-    g.grab()  # the readout paints without error
-    # Off the panes, or over a pane with no readings yet: nothing.
-    g.hover = QPointF(2, 2)
-    assert g.hovered() is None
-    g.hover = QPointF(g._plots["upload"].center())
-    assert g.hovered() is None
-    assert len(_clock(start)) == 8 and _clock(start).count(":") == 2
 
 
 def test_footer_names_automatic_nearby_not_cloudflare(qapp, monkeypatch):

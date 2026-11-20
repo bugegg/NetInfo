@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import re
 import time
 
 from PyQt6.QtCore import QCoreApplication, QEvent, QObject, Qt, QTimer, QUrl
@@ -66,6 +67,7 @@ from .dns_check_window import DnsCheckThread, DnsCheckWindow
 from .tracepath_window import TracepathThread, TracepathWindow
 from .ping_graph import PingGraphWindow
 from . import terminal
+from .updates_dialog import UpdatesDialog
 from .vendor_update_thread import VendorUpdateThread
 
 #: How often a host with unresolved MAC/hostname/vendor is tried again. This
@@ -103,6 +105,7 @@ class MainWindow(QMainWindow):
         self._vendor_db.seed_from()
         self._vendor_update_thread: VendorUpdateThread | None = None
         self._update_check_thread: UpdateCheckThread | None = None
+        self._updates_dialog: UpdatesDialog | None = None
         self._update_download_thread: UpdateDownloadThread | None = None
         #: The automatic check at launch only speaks up when there's an update.
         self._update_check_silent = True
@@ -623,6 +626,40 @@ class MainWindow(QMainWindow):
         self._update_status_bar()
         return True
 
+    def quick_add_hosts(self, text: str) -> tuple[int, str]:
+        """Adds the hosts typed in the overview's quick-add field (spaces,
+        commas or semicolons between them) and starts pinging, as Add Hosts
+        does. Hosts already in the list are skipped. Returns (number added,
+        error message)."""
+        lines = "\n".join(t for t in re.split(r"[\s,;]+", text) if t)
+        try:
+            parsed = hostfile.parse_host_list(
+                lines, max_addresses=self.settings.max_range_addresses)
+        except hostfile.HostListError as exc:
+            return 0, str(exc)
+        if not parsed:
+            return 0, "No hosts found"
+        invalid = list(dict.fromkeys(h.host for h in parsed if not hostfile.is_valid_host(h.host)))
+        if invalid:
+            return 0, ("Not a valid IP address or host name: " + ", ".join(invalid[:5])
+                       + (" …" if len(invalid) > 5 else ""))
+        known = {(e.host.casefold(), e.port) for e in self._model.entries()}
+        fresh = []
+        for host in parsed:
+            key = (host.host.casefold(), host.port)
+            if key not in known:
+                known.add(key)
+                fresh.append(host)
+        entries = self._entries_from_parsed(fresh)
+        if not entries:
+            return 0, ""
+        self._model.add_entries(entries)
+        self._show_new_hosts()
+        self._push_targets()
+        self._update_status_bar()
+        self.start_pinging()
+        return len(entries), ""
+
     def load_host_list(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Load Host List", "", "Text files (*.txt);;All files (*)"
@@ -987,9 +1024,10 @@ class MainWindow(QMainWindow):
         return window
 
     def check_lldp_cdp(self) -> LldpCdpWindow:
-        """Open the LLDP/CDP Status window to pick an interface and check
-        it; it's about this Mac's own ports, so the host selection doesn't
-        matter. If it's open already, its interface list is refreshed."""
+        """Open the LLDP/CDP Status window and start listening on the first
+        interface straight away; it's about this Mac's own ports, so the host
+        selection doesn't matter. If it's open already, its interface list is
+        refreshed and, unless it's still listening, it checks again."""
         window = self._lldp_cdp_window
         # A just-closed window lingers until Qt deletes it; don't reuse it.
         if window is not None and window.isVisible():
@@ -1001,6 +1039,8 @@ class MainWindow(QMainWindow):
         window.show()
         window.raise_()
         window.activateWindow()
+        if not window.running and window.button.isEnabled():
+            window.start()
         return window
 
     def _on_lldp_cdp_window_destroyed(self) -> None:
@@ -1398,6 +1438,8 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage("Downloading the IEEE MAC vendor registry...")
         self._start_vendor_update(auto=False)
+        if (dialog := self._open_updates_dialog()) is not None:
+            dialog.set_vendor_busy()
 
     def _auto_update_vendor_database(self) -> None:
         """Once a month, quietly fetch a newer vendor database if one has
@@ -1416,6 +1458,8 @@ class MainWindow(QMainWindow):
         thread.start()
 
     def _on_vendor_update_succeeded(self, count: int) -> None:
+        if (dialog := self._open_updates_dialog()) is not None:
+            dialog.set_vendor_done(count)
         if not count:  # nothing newer than what's here
             thread = self._vendor_update_thread
             if thread is not None and not thread.auto:
@@ -1436,6 +1480,10 @@ class MainWindow(QMainWindow):
         thread = self._vendor_update_thread
         if thread is not None and thread.auto:
             return  # offline, say: tried again at the next launch
+        if (dialog := self._open_updates_dialog()) is not None:
+            dialog.set_vendor_error(message)
+            self._update_status_bar()
+            return
         QMessageBox.warning(self, "Update MAC Vendor Database", message)
         self._update_status_bar()
 
@@ -1444,8 +1492,41 @@ class MainWindow(QMainWindow):
         if thread is not None:
             thread.wait(2000)
         self.action_update_vendor_db.setEnabled(True)
+        if (dialog := self._open_updates_dialog()) is not None:
+            dialog.vendor_button.setEnabled(True)
 
     # -- app updates -------------------------------------------------------
+
+    def show_updates(self) -> None:
+        """The sidebar's Check for updates: the Updates window, which checks
+        for a newer app straight away and shows the vendor database."""
+        dialog = self._updates_dialog
+        if dialog is None:
+            dialog = self._updates_dialog = UpdatesDialog(self)
+        dialog.show_vendor_info()
+        if self._vendor_update_thread is not None and not self._vendor_update_thread.auto:
+            dialog.set_vendor_busy()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        if self._update_download_thread is not None:
+            dialog.set_app_downloading(self._update_download_thread.release.version)
+        elif self._update_check_thread is not None:
+            # The quiet check at launch is still running: let it report here.
+            self._update_check_silent = False
+            dialog.set_app_checking()
+        else:
+            self.check_for_updates()
+
+    def _open_updates_dialog(self) -> UpdatesDialog | None:
+        dialog = self._updates_dialog
+        return dialog if dialog is not None and dialog.isVisible() else None
+
+    def install_release(self, release: Release) -> None:
+        if self_update_supported() and release.asset_url:
+            self._start_update_download(release)
+        else:
+            QDesktopServices.openUrl(QUrl(release.page_url))
 
     def check_for_updates(self, silent: bool = False) -> None:
         """Ask GitHub Releases for a newer version; offer to install it.
@@ -1456,6 +1537,8 @@ class MainWindow(QMainWindow):
             return
         self._update_check_silent = silent
         self.action_check_updates.setEnabled(False)
+        if not silent and (dialog := self._open_updates_dialog()) is not None:
+            dialog.set_app_checking()
         if not silent:
             self.statusBar().showMessage("Checking for updates...")
         thread = UpdateCheckThread()
@@ -1469,6 +1552,13 @@ class MainWindow(QMainWindow):
         silent = self._update_check_silent
         if not silent:
             self._update_status_bar()
+        if not silent and (dialog := self._open_updates_dialog()) is not None:
+            if is_newer(release.version):
+                dialog.set_app_available(
+                    release, self_update_supported() and bool(release.asset_url))
+            else:
+                dialog.set_app_latest()
+            return
         if not is_newer(release.version):
             if not silent:
                 QMessageBox.information(
@@ -1507,6 +1597,9 @@ class MainWindow(QMainWindow):
         if self._update_check_silent:
             return  # offline at launch, say: not worth a dialog
         self._update_status_bar()
+        if (dialog := self._open_updates_dialog()) is not None:
+            dialog.set_app_error(message)
+            return
         QMessageBox.warning(self, "Check for Updates", message)
 
     def _on_update_check_finished(self) -> None:
@@ -1519,6 +1612,8 @@ class MainWindow(QMainWindow):
     def _start_update_download(self, release: Release) -> None:
         self.action_check_updates.setEnabled(False)
         self.statusBar().showMessage(f"Downloading NetInfoView {release.version}...")
+        if (dialog := self._open_updates_dialog()) is not None:
+            dialog.set_app_downloading(release.version)
         thread = UpdateDownloadThread(release)
         thread.downloaded.connect(self._on_update_downloaded)
         thread.failed.connect(self._on_update_download_failed)
@@ -1530,13 +1625,20 @@ class MainWindow(QMainWindow):
         try:
             install_update(downloaded)
         except (AppUpdateError, OSError) as exc:
-            QMessageBox.warning(self, "Update", f"Could not install the update: {exc}")
             self._update_status_bar()
+            if (dialog := self._open_updates_dialog()) is not None:
+                dialog.set_app_error(f"Could not install the update: {exc}")
+                return
+            QMessageBox.warning(self, "Update", f"Could not install the update: {exc}")
             return
         self.close()
         QCoreApplication.quit()
 
     def _on_update_download_failed(self, message: str) -> None:
+        if (dialog := self._open_updates_dialog()) is not None:
+            dialog.set_app_error(message)
+            self._update_status_bar()
+            return
         QMessageBox.warning(self, "Update", message)
         self._update_status_bar()
 

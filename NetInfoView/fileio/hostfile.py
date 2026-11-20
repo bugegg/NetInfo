@@ -27,6 +27,25 @@ MAX_RANGE_ADDRESSES = 256
 MAX_RANGE_ADDRESSES_CEILING = 16_777_216
 
 #: A trailing :port, but not the colons inside an IPv6 literal.
+_HOST_LABEL = re.compile(r"^(?!-)[a-z0-9_-]{1,63}(?<!-)$", re.IGNORECASE)
+
+
+def is_valid_host(host: str) -> bool:
+    """An IP address (v4 or v6), or a host name made of valid DNS labels.
+    Something that looks numeric, like 192.168.1.300 or 10.0.0, must be a
+    real IP address."""
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        pass
+    name = host.rstrip(".")
+    if not name or len(name) > 253 or re.fullmatch(r"[\d.]+", name):
+        return False
+    labels = name.split(".")
+    return all(_HOST_LABEL.match(label) for label in labels) and not labels[-1].isdigit()
+
+
 _PORT_RE = re.compile(r"^(?P<host>[^:\s]+):(?P<port>\d{1,5})$")
 _CIDR_RE = re.compile(r"^(?P<network>\d{1,3}(?:\.\d{1,3}){3})/(?P<bits>\d{1,2})$")
 _FULL_RANGE_RE = re.compile(

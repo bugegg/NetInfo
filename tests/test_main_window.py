@@ -590,10 +590,8 @@ def test_check_for_updates_has_a_sidebar_button(window):
     ]
     assert len(buttons) == 1
     assert not buttons[0].icon().isNull()
-    # Its menu holds both updates: the app, and the MAC vendor database.
-    assert buttons[0].menu().actions() == [
-        window.action_check_updates, window.action_update_vendor_db,
-    ]
+    # It opens the Updates window (app + MAC vendor database), no menu.
+    assert buttons[0].menu() is None
     assert window.action_check_updates not in window._table.actions()
 
 
@@ -765,3 +763,63 @@ def test_restarting_pings_gives_unresolved_hosts_their_lookups_again(window, mon
     finally:
         window.stop_pinging()
         window._engine.wait(2000)
+
+
+def test_quick_add_hosts(window, monkeypatch):
+    monkeypatch.setattr(window, "start_pinging", lambda: None)
+    assert window.quick_add_hosts("10.0.0.1, 10.0.0.2;10.0.0.1") == (2, "")
+    assert window.quick_add_hosts("10.0.0.2") == (0, "")  # already there
+    assert window.quick_add_hosts(",;,") == (0, "No hosts found")
+    count, error = window.quick_add_hosts("192.168.1.300, 10.0.0.9")
+    assert count == 0 and error == "Not a valid IP address or host name: 192.168.1.300"
+    count, error = window.quick_add_hosts("10.0.0.0/8")
+    assert count == 0 and "limit" in error
+
+
+def test_updates_window_reports_every_outcome(window, monkeypatch):
+    from NetInfoView.app_update import AppUpdateError, Release
+    from NetInfoView.ui import main_window as mw
+
+    calls = []
+    monkeypatch.setattr(window, "check_for_updates", lambda silent=False: calls.append(silent))
+    window.show_updates()
+    dialog = window._updates_dialog
+    assert calls == [False]
+    # An offline error's "<urlopen error …>" stays readable (escaped, not a tag).
+    dialog.set_app_error("Could not check: <urlopen error [Errno 8]>")
+    assert "&lt;urlopen error" in dialog.app_status.text()
+
+    # A failed install lands in the window, which can try again.
+    def broken(_):
+        raise AppUpdateError("unpack failed")
+    monkeypatch.setattr(mw, "install_update", broken)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: calls.append("box"))
+    dialog.set_app_downloading("9.9")
+    window._on_update_downloaded("/tmp/x")
+    assert "unpack failed" in dialog.app_status.text() and dialog.app_button.isEnabled()
+    assert "box" not in calls
+
+    # Opened while the quiet launch check runs: that check reports here.
+    class Running:
+        pass
+    window._update_check_thread = Running()
+    window._update_check_silent = True
+    dialog.close()
+    window.show_updates()
+    assert not window._update_check_silent and "Checking" in dialog.app_status.text()
+    window._update_check_thread = None
+    release = Release(version="99.0", page_url="https://example.invalid", asset_url="", notes="")
+    window._on_update_check_found(release)
+    assert "99.0" in dialog.app_status.text()
+    dialog.close()
+
+
+def test_quick_add_alerts_on_a_bad_address(window, monkeypatch):
+    alerts = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: alerts.append(a[2]))
+    field = window._dashboard.quick_add
+    field.setText("192.168.1.999")
+    window._dashboard._quick_add()
+    assert alerts == ["Not a valid IP address or host name: 192.168.1.999"]
+    assert field.text() == "192.168.1.999" and field.property("error")
+    assert window._model.rowCount() == 0

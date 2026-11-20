@@ -1,5 +1,5 @@
 """Speed Test window (ping/speedtest.py): a speedometer gauge beside the
-result cards, a graph of speed over time, and the session's earlier runs,
+result cards and the session's earlier runs,
 laid out after nPerf's test page."""
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ import re
 import statistics
 import tempfile
 import threading
-import time
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +18,7 @@ from PyQt6.QtCore import (
     QEasingCurve, QEvent, QPointF, QRectF, QSize, Qt, QThread, QVariantAnimation, pyqtSignal,
 )
 from PyQt6 import sip
-from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPalette, QPen
+from PyQt6.QtGui import QColor, QConicalGradient, QFont, QPainter, QPainterPath, QPalette, QPen
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -55,9 +54,11 @@ AMBER = "#d97706"
 
 #: (label, seconds per direction).
 DURATIONS = (("Quick · 5 s", 5.0), ("Standard · 10 s", 10.0), ("Long · 20 s", 20.0))
-DEFAULT_WINDOW = QSize(1060, 940)
+DEFAULT_WINDOW = QSize(1060, 820)
+#: The gauge-and-cards panel grows no taller than this.
+TOP_PANEL_MAX = 420
 #: The content shrinks to fit down to this size (see SpeedTestWindow._rescale).
-MIN_WINDOW = QSize(760, 650)
+MIN_WINDOW = QSize(760, 560)
 
 
 #: Gauge scale marks in Mbps; the scale grows to the next range once a
@@ -68,8 +69,14 @@ SCALES = (
     (0, 5, 10, 25, 50, 100, 250, 500, 1000),
     (0, 10, 50, 100, 250, 500, 1000, 2500, 5000, 10000),
 )
-ARC_START = 225.0   # degrees, Qt's counter-clockwise from 3 o'clock
-ARC_SPAN = -270.0
+ARC_START = 240.0   # degrees, Qt's counter-clockwise from 3 o'clock
+ARC_SPAN = -300.0
+#: The reading's colour along the ring (0 = empty, 1 = full), per phase.
+GAUGE_COLORS = {
+    "download": ((0.0, "#2f6fe4"), (0.35, "#3fa7b8"), (0.65, "#5fd672"), (1.0, "#b3c93a")),
+    "upload": ((0.0, "#6d3fe0"), (0.5, "#a35cf0"), (1.0, "#e9559b")),
+    "ping": ((0.0, "#16a34a"), (0.5, "#84cc16"), (1.0, "#f59e0b")),
+}
 #: How much of each new reading (already a rolling second) the needle moves by.
 NEEDLE_SMOOTHING = 0.6
 
@@ -256,8 +263,8 @@ class Themed:
 
 
 class Gauge(Themed, QWidget):
-    """Speedometer: a 270° arc with evenly spaced marks, the needle, and the
-    reading in the middle."""
+    """Speedometer: a broad 300° ring with evenly spaced marks, filled in a
+    gradient up to the reading, which sits in the middle."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -327,272 +334,101 @@ class Gauge(Themed, QWidget):
                 return step * (i + (value - lo) / (hi - lo))
         return 1.0
 
+    def _band(self, center: QPointF, outer: float, inner: float,
+              start: float, span: float) -> QPainterPath:
+        """The ring between radii `inner` and `outer`, from `start` degrees
+        through `span` (negative: clockwise)."""
+        o = QRectF(center.x() - outer, center.y() - outer, 2 * outer, 2 * outer)
+        i = QRectF(center.x() - inner, center.y() - inner, 2 * inner, 2 * inner)
+        path = QPainterPath()
+        path.arcMoveTo(o, start)
+        path.arcTo(o, start, span)
+        path.arcTo(i, start + span, -span)
+        path.closeSubpath()
+        return path
+
     def paintEvent(self, event):
         c = self.colors()
+        dark = c["bg"].lightness() < 128
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        # The arc reaches 0.354 of its size below the centre (sin 45°).
-        side = min(self.width() - 24, (self.height() - 16) / 0.88)
-        rect = QRectF((self.width() - side) / 2, 8, side, side)
-        center = rect.center()
-        thick = max(10.0, side / 18)
+        # The ring opens at the bottom: its ends reach sin(60°) of the
+        # radius below the centre, plus the outline.
+        R = max(40.0, min((self.width() - 16) / 2, (self.height() - 12) / 1.88))
+        center = QPointF(self.width() / 2, 6 + R)
+        thick = R * 0.27
+        inner = R - thick
         sweeping = self._sweep.state() == QVariantAnimation.State.Running
         live = self.phase in ("download", "upload", "ping") or sweeping
-
-        pen = QPen(c["track"], thick, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        p.setPen(pen)
-        p.drawArc(rect, int(ARC_START * 16), int(ARC_SPAN * 16))
         frac = self.fraction(self.value)
-        if frac > 0:
-            pen.setColor(self.color)
-            p.setPen(pen)
-            p.drawArc(rect, int(ARC_START * 16), int(ARC_SPAN * frac * 16))
 
+        outline = QColor("#0b1220" if dark else "#1f2a37")
+        track = QColor("#334155" if dark else "#c3cad3")
+        # The empty track, outlined.
+        p.setPen(QPen(outline, max(1.0, R / 160), cap=Qt.PenCapStyle.RoundCap,
+                      join=Qt.PenJoinStyle.RoundJoin))
+        p.setBrush(track)
+        p.drawPath(self._band(center, R, inner, ARC_START, ARC_SPAN))
+
+        # The reading: a band coloured along its length, lighter in the middle.
+        if frac > 0:
+            gradient = QConicalGradient(center, ARC_START)
+            stops = GAUGE_COLORS.get(self.phase if self.phase in GAUGE_COLORS else "download")
+            gradient.setColorAt(0.0, QColor(stops[0][1]))
+            for f, color in stops:
+                gradient.setColorAt(1 - f * abs(ARC_SPAN) / 360, QColor(color))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(gradient)
+            gap = max(1.5, R / 90)
+            p.drawPath(self._band(center, R - gap, inner + gap, ARC_START, ARC_SPAN * frac))
+            p.setBrush(QColor(255, 255, 255, 60 if dark else 120))
+            p.drawPath(self._band(center, R - thick * 0.22, inner + thick * 0.22,
+                                  ARC_START, ARC_SPAN * frac))
+
+        # Marks: a tick at the rim, the value inside the band.
         small = QFont(self.font())
-        small.setPointSizeF(max(8.0, self.font().pointSizeF() - 1))
+        small.setPixelSize(max(9, int(R / 13)))
+        small.setWeight(QFont.Weight.DemiBold)
         p.setFont(small)
-        p.setPen(c["muted"])
-        radius = side / 2 - thick - 14
+        ink = c["ink"]
         for i, mark in enumerate(self.marks):
             angle = math.radians(ARC_START + ARC_SPAN * i / (len(self.marks) - 1))
-            pt = QPointF(center.x() + radius * math.cos(angle),
-                         center.y() - radius * math.sin(angle))
+            cos, sin = math.cos(angle), -math.sin(angle)
+            p.setPen(QPen(outline, max(1.0, R / 140)))
+            p.drawLine(QPointF(center.x() + R * cos, center.y() + R * sin),
+                       QPointF(center.x() + (R - thick * 0.22) * cos,
+                               center.y() + (R - thick * 0.22) * sin))
             if self.ping:
                 text = "1s" if mark == 1000 else str(mark)
             else:
                 text = f"{mark // 1000}G" if mark >= 1000 and mark % 1000 == 0 else str(mark)
-            p.drawText(QRectF(pt.x() - 22, pt.y() - 9, 44, 18), Qt.AlignmentFlag.AlignCenter, text)
+            # The end labels step in from the ring's square ends.
+            last = len(self.marks) - 1
+            inward = 7 if i == 0 else -7 if i == last else 0  # degrees along the ring
+            label = math.radians(ARC_START + ARC_SPAN * i / last - inward)
+            r = R - thick * 0.55
+            pt = QPointF(center.x() + r * math.cos(label), center.y() - r * math.sin(label))
+            p.setPen(ink)
+            p.drawText(QRectF(pt.x() - 30, pt.y() - 10, 60, 20), Qt.AlignmentFlag.AlignCenter, text)
 
-        angle = math.radians(ARC_START + ARC_SPAN * frac)
-        length = radius - 22
-        tip = QPointF(center.x() + length * math.cos(angle), center.y() - length * math.sin(angle))
-        needle = self.color if self.phase else c["muted"]
-        p.setPen(QPen(needle, 3, cap=Qt.PenCapStyle.RoundCap))
-        p.drawLine(center, tip)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(needle)
-        p.drawEllipse(center, 7, 7)
-
+        # The reading in the middle.
         big = QFont(self.font())
-        big.setPixelSize(int(side / 7.5))
+        big.setPixelSize(max(14, int(inner * 0.5)))
         big.setWeight(QFont.Weight.Bold)
         p.setFont(big)
-        p.setPen(c["ink"])
-        p.drawText(QRectF(rect.left(), center.y() + side * 0.08, side, side * 0.18),
-                   Qt.AlignmentFlag.AlignCenter, (format_ms(self.value) if self.ping else format_mbps(self.value)) if live else "–")
+        p.setPen(ink)
+        text = ((format_ms(self.value) if self.ping else format_mbps(self.value))
+                if live else "–")
+        p.drawText(QRectF(center.x() - inner, center.y() - inner * 0.42, 2 * inner, inner * 0.6),
+                   Qt.AlignmentFlag.AlignCenter, text)
         unit_font = QFont(self.font())
-        unit_font.setPixelSize(max(12, int(side / 22)))
+        unit_font.setPixelSize(max(11, int(inner * 0.17)))
         p.setFont(unit_font)
         unit = "ms" if self.ping else "Mbps"
         p.setPen(c["muted"])
-        p.drawText(QRectF(rect.left(), center.y() + side * 0.26, side, 20),
-                   Qt.AlignmentFlag.AlignCenter, (f"{unit} {self.phase}" if live and not sweeping else unit))
-
-
-class LiveGraph(Themed, QWidget):
-    """Speed over time: download then upload, against the clock."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setMinimumHeight(110)
-        self.duration = 10.0
-        self.series: dict[str, list[tuple[float, float]]] = {"download": [], "upload": []}
-        self.phase_start: dict[str, float] = {}
-        self.start = 0.0
-        #: The mouse, while it's over the graph: the nearest reading is shown.
-        self.hover: QPointF | None = None
-        #: Each pane's plot area as last painted, for finding what's hovered.
-        self._plots: dict[str, QRectF] = {}
-        self.setMouseTracking(True)
-
-    def mouseMoveEvent(self, event) -> None:
-        self.hover = event.position()
-        self.update()
-
-    def leaveEvent(self, event) -> None:
-        self.hover = None
-        self.update()
-        super().leaveEvent(event)
-
-    def hovered(self) -> tuple[str, float, float] | None:
-        """(phase, time, Mbps) of the reading nearest the mouse in the pane
-        it's over, or None."""
-        if self.hover is None:
-            return None
-        for phase, plot in self._plots.items():
-            points = self.series.get(phase) or []
-            start = self.phase_start.get(phase)
-            if start is None or not points or not (plot.left() - 4 <= self.hover.x() <= plot.right() + 4
-                                                     and plot.top() <= self.hover.y() <= plot.bottom() + 24):
-                continue
-            t = start + (self.hover.x() - plot.left()) / plot.width() * self.duration
-            when, value = min(points, key=lambda point: abs(point[0] - t))
-            return phase, when, value
-        return None
-
-    def reset(self, duration: float) -> None:
-        self.duration = duration
-        self.series = {"download": [], "upload": []}
-        self.phase_start = {}
-        self.start = 0.0
-        self.update()
-
-    def begin(self, phase: str) -> None:
-        now = time.time()
-        self.phase_start[phase] = now
-        if not self.start:
-            self.start = now
-        self.update()
-
-    def add(self, phase: str, seconds: float, value: float) -> None:
-        if phase not in self.phase_start:
-            self.begin(phase)
-        self.series.setdefault(phase, []).append((self.phase_start[phase] + seconds, value))
-        self.update()
-
-    @staticmethod
-    def nice_ceiling(value: float, steps: int = 6) -> tuple[float, float]:
-        """(ceiling, step) with about `steps` round steps."""
-        if value <= 0:
-            return 100.0, 20.0
-        raw = value / max(1, steps)
-        mag = 10 ** math.floor(math.log10(raw))
-        step = next(m * mag for m in (1, 2, 2.5, 5, 10) if m * mag >= raw)
-        return step * math.ceil(value / step), step
-
-    def paintEvent(self, event):
-        """Two fixed panes, download on the left and upload on the right, each
-        0 s to the test's length, over one shared Mbps scale."""
-        c = self.colors()
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        fm = p.fontMetrics()
-        top = max((v for s in self.series.values() for _, v in s), default=0)
-        # As many gridlines as fit with room for their labels.
-        steps = max(2, min(6, int((self.height() - 52) / (fm.height() + 6))))
-        ceiling, step = self.nice_ceiling(top * 1.05, steps)
-        label_w = fm.horizontalAdvance(f"{ceiling:,.0f}") + 8
-        area = QRectF(28 + label_w, 26, self.width() - 36 - label_w, self.height() - 52)
-        gap = 28.0
-        pane_w = (area.width() - gap) / 2
-        panes = (("download", "Download", BLUE, QRectF(area.left(), area.top(), pane_w, area.height())),
-                 ("upload", "Upload", PURPLE,
-                  QRectF(area.left() + pane_w + gap, area.top(), pane_w, area.height())))
-
-        # Y axis, shared.
-        p.save()
-        p.translate(10, area.center().y())
-        p.rotate(-90)
-        p.setPen(c["muted"])
-        p.drawText(QRectF(-30, -8, 60, 16), Qt.AlignmentFlag.AlignCenter, "Mbps")
-        p.restore()
-        n = round(ceiling / step)
-        for i in range(n + 1):
-            y = area.bottom() - area.height() * i / n
-            p.setPen(c["muted"])
-            p.drawText(QRectF(area.left() - label_w - 6, y - 8, label_w, 16),
-                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                       f"{step * i:,.0f}")
-
-        # The time axis reads the clock once a phase has run ("14:32:05"),
-        # every 1, 2, 5 or 10 s, as close together as the labels fit.
-        label_w = fm.horizontalAdvance("00:00:00") + 12
-        seconds_step = next((s for s in (1, 2, 5, 10)
-                             if s >= self.duration / 10
-                             and pane_w * s / self.duration >= label_w), 10)
-        self._plots = {}
-        for phase, title, color, plot in panes:
-            self._plots[phase] = plot
-            phase_start = self.phase_start.get(phase)
-            # Pane title, grid, and its own 0 s … duration axis.
-            p.setPen(QColor(color))
-            p.drawText(QRectF(plot.left(), 0, plot.width(), 20),
-                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
-            p.setPen(QPen(c["grid"], 1))
-            for i in range(n + 1):
-                y = plot.bottom() - plot.height() * i / n
-                p.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y))
-            t = 0
-            while t <= self.duration + 1e-9:
-                x = plot.left() + plot.width() * t / self.duration
-                p.setPen(QPen(c["grid"], 1))
-                p.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()))
-                p.setPen(c["muted"])
-                align = (Qt.AlignmentFlag.AlignLeft if t == 0 else
-                         Qt.AlignmentFlag.AlignRight if t + seconds_step > self.duration
-                         else Qt.AlignmentFlag.AlignHCenter)
-                box = (QRectF(x, plot.bottom() + 6, label_w, 18) if t == 0 else
-                       QRectF(x - label_w, plot.bottom() + 6, label_w, 18)
-                       if t + seconds_step > self.duration else
-                       QRectF(x - label_w / 2, plot.bottom() + 6, label_w, 18))
-                text = (_clock(phase_start + t) if phase_start is not None else f"{t:g} s")
-                p.drawText(box, align | Qt.AlignmentFlag.AlignVCenter, text)
-                t += seconds_step
-
-            points = self.series.get(phase) or []
-            start = self.phase_start.get(phase)
-            if start is None or len(points) < 2:
-                if not self.start and phase == "download":
-                    p.setPen(c["muted"])
-                    p.drawText(QRectF(area.left(), area.top(), area.width(), area.height()),
-                               Qt.AlignmentFlag.AlignCenter, "Press Start to run a test")
-                continue
-
-            def at(t: float, v: float, plot=plot, start=start) -> QPointF:
-                x = min(max((t - start) / self.duration, 0.0), 1.0)
-                return QPointF(plot.left() + x * plot.width(),
-                               plot.bottom() - min(v, ceiling) / ceiling * plot.height())
-
-            first = at(*points[0])
-            line = QPainterPath(first)
-            fill_path = QPainterPath(QPointF(first.x(), plot.bottom()))
-            fill_path.lineTo(first)
-            for t, v in points[1:]:
-                line.lineTo(at(t, v))
-                fill_path.lineTo(at(t, v))
-            fill_path.lineTo(QPointF(at(*points[-1]).x(), plot.bottom()))
-            fill = QColor(color)
-            fill.setAlpha(40)
-            p.save()
-            p.setClipRect(plot.adjusted(0, -2, 0, 0))
-            p.fillPath(fill_path, fill)
-            p.setPen(QPen(QColor(color), 2))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawPath(line)
-            p.restore()
-
-        hovered = self.hovered()
-        if hovered is not None:
-            self._paint_hover(p, c, fm, *hovered, ceiling)
-
-    def _paint_hover(self, p: QPainter, c, fm, phase: str, when: float, value: float,
-                     ceiling: float) -> None:
-        """A guide line and dot at the reading, with its time and speed."""
-        plot, start = self._plots[phase], self.phase_start[phase]
-        color = QColor(BLUE if phase == "download" else PURPLE)
-        x = plot.left() + min(max((when - start) / self.duration, 0.0), 1.0) * plot.width()
-        y = plot.bottom() - min(value, ceiling) / ceiling * plot.height()
-        p.setPen(QPen(c["muted"], 1, Qt.PenStyle.DashLine))
-        p.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()))
-        p.setPen(QPen(c["panel"], 2))
-        p.setBrush(color)
-        p.drawEllipse(QPointF(x, y), 4.5, 4.5)
-        text = f"{format_mbps(value)} Mbps · {_clock(when)}"
-        w, h = fm.horizontalAdvance(text) + 16, fm.height() + 8
-        # Beside the dot, kept inside the pane.
-        left = x + 10 if x + 10 + w <= plot.right() else x - 10 - w
-        top = min(max(y - h - 8, plot.top()), plot.bottom() - h)
-        box = QRectF(max(plot.left(), left), top, w, h)
-        p.setPen(QPen(c["border"], 1))
-        p.setBrush(c["panel"])
-        p.drawRoundedRect(box, 6, 6)
-        p.setPen(c["ink"])
-        p.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
-
-
-def _clock(timestamp: float) -> str:
-    """Local wall-clock time, "14:32:05"."""
-    return time.strftime("%H:%M:%S", time.localtime(timestamp))
+        p.drawText(QRectF(center.x() - inner, center.y() + inner * 0.2, 2 * inner, inner * 0.25),
+                   Qt.AlignmentFlag.AlignCenter,
+                   f"{unit} {self.phase}" if live and not sweeping else unit)
 
 
 def _chevron_file(color: str) -> str:
@@ -896,20 +732,6 @@ class SpeedTestWindow(QWidget):
         top.addWidget(rule)
         top.addWidget(cards_panel, 10)
 
-        # Speed over time.
-        self.graph = LiveGraph()
-        self.graph_max = _label("", "muted")
-        graph_head = QHBoxLayout()
-        graph_head.setSpacing(18)
-        graph_head.addWidget(_label("Speed over time", "panelTitle"))
-        graph_head.addStretch(1)
-        graph_head.addWidget(self.graph_max)
-        graph_panel = Panel()
-        graph_layout = QVBoxLayout(graph_panel)
-        graph_layout.setContentsMargins(20, 14, 20, 12)
-        graph_layout.addLayout(graph_head)
-        graph_layout.addWidget(self.graph, 1)
-
         # Session history.
         self.history = QTreeWidget()
         self.history.setObjectName("history")
@@ -924,8 +746,11 @@ class SpeedTestWindow(QWidget):
         for col in range(2, 6):
             self.history.headerItem().setTextAlignment(
                 col, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.history.setMinimumHeight(60)
-        self.history.setMaximumHeight(150)
+        # Room for the header and three runs; it scrolls beyond that.
+        self.history.setMinimumHeight(118)
+        self.history.setMaximumHeight(190)
+        self.history.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # no heavy focus/selection bar
+        self.history.setUniformRowHeights(True)
         history_panel = Panel()
         history_layout = QVBoxLayout(history_panel)
         history_layout.setContentsMargins(20, 14, 20, 14)
@@ -953,7 +778,7 @@ class SpeedTestWindow(QWidget):
         self._spacing = [
             (layout, (28, 20, 28, 14), 14), (gauge_layout, (16, 16, 16, 18), 6),
             (cards, (18, 18, 18, 18), 18), (top, (6, 6, 6, 6), 6),
-            (graph_layout, (20, 14, 20, 12), 6), (history_layout, (20, 14, 20, 14), 6),
+            (history_layout, (20, 14, 20, 14), 6),
         ]
         heading = QVBoxLayout()
         heading.setSpacing(2)
@@ -969,9 +794,12 @@ class SpeedTestWindow(QWidget):
         self._cards_row.addWidget(self.device_card, 1)
         layout.addLayout(self._cards_row)
         layout.addLayout(controls)
+        # The gauge and cards stop growing at a comfortable size; a taller
+        # window gives the room to the history instead.
+        top_panel.setMaximumHeight(TOP_PANEL_MAX)
         layout.addWidget(top_panel, 5)
-        layout.addWidget(graph_panel, 4)
         layout.addWidget(history_panel, 2)
+        layout.addStretch(0)
         layout.addLayout(footer)
 
         self.picker = ServerPicker(self)
@@ -1421,7 +1249,13 @@ class SpeedTestWindow(QWidget):
             QLabel#pill {{ font-weight: 600; }}
             QTreeWidget#history {{ background: {c['panel']}; border: 1px solid {c['border']};
                                    border-radius: 8px; }}
-            QTreeWidget#history::item {{ padding: 6px 4px; }}
+            QTreeWidget#history::item {{ padding: 5px 10px; }}
+            QTreeWidget#history::item:selected {{ background: {c['pill_run']}; color: {c['ink']}; }}
+            QTreeWidget#history::item:hover {{ background: {c['head']}; }}
+            QTreeWidget#history QHeaderView::section {{ background: {c['head']};
+                                    color: {c['muted']}; font-weight: 600;
+                                    border: none; border-bottom: 1px solid {c['border']};
+                                    padding: 5px 10px; }}
             QHeaderView::section {{ background: {c['head']}; color: {c['ink']};
                                     border: none; border-bottom: 1px solid {c['border']};
                                     border-right: 1px solid {c['border']}; padding: 7px 10px; }}
@@ -1510,8 +1344,7 @@ class SpeedTestWindow(QWidget):
         if hasattr(self, "picker"):
             self.picker.apply_theme()
         self._refresh_button_icons()
-        for w in (self.gauge, self.graph):
-            w.update()
+        self.gauge.update()
 
     def _refresh_button_icons(self) -> None:
         self.copy_button.setIcon(glyphs.icon("copy", self.theme["ink"], 16))
@@ -1579,8 +1412,6 @@ class SpeedTestWindow(QWidget):
         self._result = None
         self._phase = ""
         self.gauge.reset()
-        self.graph.reset(options.duration_s)
-        self.graph_max.setText("")
         for card in (self.card_down, self.card_up, self.card_ping, self.card_jitter):
             card.set("–")
         self.server_label.setText(options.server.name if isinstance(options.server, ServerSpec)
@@ -1621,8 +1452,6 @@ class SpeedTestWindow(QWidget):
             self._set_status("run", "Testing ping…")
             return
         self.gauge.set_value(0.0, phase)
-        if phase in ("download", "upload"):
-            self.graph.begin(phase)
         self._set_status("run", {"connect": "Connecting…",
                                  "download": "Testing download…",
                                  "upload": "Testing upload…"}.get(phase, ""))
@@ -1638,9 +1467,6 @@ class SpeedTestWindow(QWidget):
             self.card_jitter.set(f"{format_ms(speedtest.jitter(self._pings))} ms"
                                  if done > 1 else "–")
             return
-        self.graph.add(phase, seconds, value)
-        top = max((v for s in self.graph.series.values() for _, v in s), default=0)
-        self.graph_max.setText(f"Max {format_mbps(top)} Mbps")
         smoothed = self.gauge.value + (value - self.gauge.value) * NEEDLE_SMOOTHING
         self.gauge.set_value(smoothed)
         card = self.card_down if phase == "download" else self.card_up
@@ -1684,7 +1510,7 @@ class SpeedTestWindow(QWidget):
         if result.download is None and self.card_down.note.text().startswith("Measuring"):
             self.card_down.set("–")
         # Back to the start: the needle swings home and the reading clears;
-        # the cards and the graph keep the results.
+        # the cards keep the results.
         self.gauge.sweep_to(0.0, 900, self.gauge.reset)
         if result.error:
             self._set_status("bad", "Test failed", result.error)
@@ -1743,11 +1569,11 @@ class SpeedTestWindow(QWidget):
     #: Scale steps (full size at 1.0) and the window size that gets 1.0.
     SCALE_STEPS = (0.7, 0.78, 0.86, 0.93, 1.0)
     #: Below these heights the history, then the subtitle, are hidden.
-    HIDE_HISTORY_BELOW = 910
-    HIDE_SUBTITLE_BELOW = 770
+    HIDE_HISTORY_BELOW = 740
+    HIDE_SUBTITLE_BELOW = 620
     #: Below this height the cards drop their notes (peak, loaded ping), and
     #: the provider card its second line.
-    HIDE_NOTES_BELOW = 770
+    HIDE_NOTES_BELOW = 620
 
     def scale_for(self, width: int, height: int) -> float:
         fit = min(width / DEFAULT_WINDOW.width(), height / DEFAULT_WINDOW.height())

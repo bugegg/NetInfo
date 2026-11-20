@@ -184,7 +184,11 @@ def test_hostname_fills_spare_width_and_can_still_be_resized(window):
     dashboard.fit_stretch_column()
     assert header.sectionResizeMode(host) == QHeaderView.ResizeMode.Interactive
     visible = [i for i in range(header.count()) if not header.isSectionHidden(i)]
-    assert sum(header.sectionSize(i) for i in visible) == window._table.viewport().width()
+    # It fills the gap exactly, unless the screen is too narrow for the
+    # 1900px asked for (a 1440px laptop): then it stops at its minimum.
+    others = sum(header.sectionSize(i) for i in visible if i != host)
+    assert header.sectionSize(host) == max(STRETCH_MIN_WIDTH,
+                                           window._table.viewport().width() - others)
 
     # Show every column: Hostname keeps a usable width instead of collapsing.
     for i in range(header.count()):
@@ -302,10 +306,14 @@ def test_right_click_menu_keeps_only_host_actions_and_view_toggles(window):
         assert action not in window._table.actions() and action in window.actions()
 
 
-def test_vendor_database_update_sits_with_check_for_updates(window):
-    from PyQt6.QtWidgets import QToolButton
-
-    assert window.action_update_vendor_db in window._dashboard.nav_updates.menu().actions()
+def test_vendor_database_update_sits_with_check_for_updates(window, monkeypatch):
+    monkeypatch.setattr(window, "check_for_updates", lambda silent=False: None)  # offline
+    # One window for both: the app, and the MAC vendor database.
+    window._dashboard.nav_updates.click()
+    dialog = window._updates_dialog
+    assert dialog is not None and dialog.isVisible()
+    assert "entries" in dialog.vendor_status.text() or "Not downloaded" in dialog.vendor_status.text()
+    dialog.close()
 
 
 def test_discovery_opens_lldp_cdp(window):

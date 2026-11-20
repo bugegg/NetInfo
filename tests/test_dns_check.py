@@ -46,6 +46,8 @@ ZONE = {
                               + struct.pack("!IIIII", 2026111701, 7200, 900, 1209600, 3600)],
     ("good.test", T["A"]): [socket.inet_aton("192.0.2.10")],
     ("good.test", T["MX"]): [struct.pack("!H", 10) + _name("mail.good.test")],
+    ("_mta-sts.good.test", T["TXT"]): [_txt("v=STSv1; id=20261120")],
+    ("_smtp._tls.good.test", T["TXT"]): [_txt("v=TLSRPTv1; rua=mailto:tls@good.test")],
     ("mail.good.test", T["A"]): [socket.inet_aton("192.0.2.25")],
     ("good.test", T["TXT"]): [_txt("v=spf1 ip4:192.0.2.0/24 include:_spf.good.test "
                                    "include:sendgrid.net -all"),
@@ -67,6 +69,10 @@ def offline_web_checks(monkeypatch):
                         lambda domain, resolver: dns_check.CheckResult("ssl", "pass", "stub"))
     monkeypatch.setattr(domain_info, "check_registration",
                         lambda domain: dns_check.CheckResult("whois", "pass", "stub"))
+    monkeypatch.setattr(domain_info, "fetch_sts_policy", lambda domain: STS_POLICY)
+
+
+STS_POLICY = "version: STSv1\nmode: enforce\nmx: *.good.test\nmax_age: 604800\n"
 
 
 _REAL_SSL = domain_info.check_ssl
@@ -160,14 +166,17 @@ def test_full_check(dns_server):
     status = {r.key: r.status for r in report.results}
     assert status == {"ns": "pass", "soa": "pass", "address": "pass", "mx": "pass",
                       "provider": "info", "spf": "pass", "dmarc": "notice", "dkim": "pass",
-                      "ptr": "pass", "blacklist": "notice", "ssl": "pass", "whois": "pass"}
+                      "ptr": "pass", "blacklist": "notice", "ssl": "pass", "whois": "pass",
+                      "mta_sts": "pass", "tlsrpt": "pass"}
     spf = report.result("spf")
     assert spf.records == ["v=spf1 ip4:192.0.2.0/24 include:_spf.good.test "
                            "include:sendgrid.net -all"]
     assert "4 of 10 DNS lookups used." in spf.details
     assert report.result("dmarc").summary == "Monitoring only · p=none"
     assert "2048-bit" in report.result("dkim").details[0]
-    assert dns_check.counts_text(report) == "9 passed | 2 notices"
+    assert dns_check.counts_text(report) == "11 passed | 2 notices"
+    assert report.result("mta_sts").summary == "Enforced"
+    assert report.result("tlsrpt").summary == "Reports to tls@good.test"
     soa = report.result("soa")
     assert soa.summary == "Serials match"
     assert "All 2 nameservers serve serial 2026111701." in soa.details
@@ -204,9 +213,10 @@ def test_needs_input_and_missing_records(dns_server):
 
 def test_unknown_domain(dns_server):
     report = _check(dns_server, domain="missing.test")
+    assert not report.exists
+    assert [r.key for r in report.results] == ["ns"]
     assert report.result("ns").summary == "Domain doesn't exist (NXDOMAIN)"
-    assert report.result("spf").status == dns_check.FAIL
-    assert report.result("dmarc").status == dns_check.FAIL
+    assert _check(dns_server).exists
 
 
 def test_no_server_answering():
@@ -251,7 +261,7 @@ def test_window_runs_a_check(window, dns_server, monkeypatch):  # noqa: F811
     assert w.tree.topLevelItemCount() == len(dns_check.CHECKS)
     assert w.tree.topLevelItem(dns_check.CHECKS.index("dmarc")).text(1) == "Notice"
     assert w.tree.topLevelItem(dns_check.CHECKS.index("provider")).text(1) == "Info"
-    assert w.chip_texts() == ["7 Passed", "2 Notices", "2 Needs input", "1 Info"]
+    assert w.chip_texts() == ["9 Passed", "2 Notices", "2 Needs input", "1 Info"]
     # Needs attention hides the passed and info rows.
     w.show_attention.click()
     shown = [w.tree.topLevelItem(i).text(0) for i in range(w.tree.topLevelItemCount())
@@ -473,3 +483,76 @@ def test_ssl_without_website():
             return []
 
     assert _REAL_SSL("good.test", Resolver()).status == dns_check.INFO
+
+
+def test_mta_sts_policy_problems(dns_server, monkeypatch):
+    monkeypatch.setattr(domain_info, "fetch_sts_policy",
+                        lambda domain: STS_POLICY.replace("*.good.test", "mx.other.test"))
+    result = _check(dns_server).result("mta_sts")
+    assert result.status == dns_check.FAIL and result.summary == "Policy doesn't cover every MX"
+    monkeypatch.setattr(domain_info, "fetch_sts_policy",
+                        lambda domain: STS_POLICY.replace("enforce", "testing"))
+    assert _check(dns_server).result("mta_sts").summary == "Testing mode only"
+
+    def unreachable(domain):
+        raise OSError("connection refused")
+    monkeypatch.setattr(domain_info, "fetch_sts_policy", unreachable)
+    assert _check(dns_server).result("mta_sts").summary == "Policy file unreachable"
+
+
+def test_mx_matches():
+    assert domain_info.mx_matches("mx1.a.test", ["*.a.test"])
+    assert not domain_info.mx_matches("x.mx1.a.test", ["*.a.test"])
+    assert domain_info.mx_matches("MX.A.TEST.", ["mx.a.test"])
+
+
+def test_window_says_a_missing_domain_does_not_exist(window, dns_server, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(window.settings, "save", lambda: None)
+    w = window.dns_check()
+    w.dns_port = dns_server
+    w.server = "127.0.0.1"
+    w.domain.setText("missing.test")
+    w.start()
+    _wait(lambda: w.report is not None and w._thread is None)
+    assert not w.results.isVisibleTo(w)
+    assert w.placeholder.text().startswith("missing.test doesn't exist.")
+    assert not w.copy_button.isEnabled()
+
+
+def test_results_arrive_one_by_one(dns_server):
+    seen = []
+    report = dns_check.check_domain("good.test", "127.0.0.1", [], "", timeout=1,
+                                    port=dns_server, on_result=seen.append)
+    assert sorted(r.key for r in seen) == sorted(dns_check.CHECKS)
+    assert [r.key for r in report.results] == list(dns_check.CHECKS)
+
+
+def test_a_crashing_check_becomes_an_error_row(dns_server, monkeypatch):
+    import http.client
+
+    def broken(domain):
+        raise http.client.IncompleteRead(b"")
+    monkeypatch.setattr(domain_info, "fetch_sts_policy", broken)
+    assert _check(dns_server).result("mta_sts").summary == "Policy file unreachable"
+
+    def boom(domain, resolver):
+        raise RuntimeError("bug")
+    monkeypatch.setattr(dns_check, "check_spf", boom)
+    spf = _check(dns_server).result("spf")
+    assert spf.status == dns_check.ERROR and "RuntimeError: bug" in spf.details[0]
+
+
+def test_mta_sts_policy_must_be_plain_text(dns_server, monkeypatch):
+    def html_page(domain):
+        raise ValueError("served as text/html, not text/plain")
+    monkeypatch.setattr(domain_info, "fetch_sts_policy", html_page)
+    result = _check(dns_server).result("mta_sts")
+    assert result.summary == "Policy file is invalid" and "text/html" in result.details[0]
+
+
+def test_tlsrpt_shows_https_report_urls_whole(monkeypatch):
+    resolver = dns_check.Resolver(["127.0.0.1"])
+    monkeypatch.setattr(resolver, "txt", lambda name: [
+        "v=TLSRPTv1; rua=mailto:tls@a.test,https://reports.a.test/x"])
+    assert dns_check.check_tlsrpt("a.test", resolver).summary == (
+        "Reports to tls@a.test, https://reports.a.test/x")
