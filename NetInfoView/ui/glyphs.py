@@ -77,9 +77,12 @@ _PATHS = {
     "columns": '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18"/>',
     "chevron": '<path d="m6 9 6 6 6-6"/>',
     "activity": '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
-    "brand": '<rect x="0.5" y="0.5" width="23" height="23" rx="6" fill="#087dff" stroke="none"/>'
-             '<g stroke="#ffffff" stroke-width="1.6"><path d="M12 5v14M5.5 8.25l13 7.5M5.5 15.75l13-7.5"/>'
-             '<circle cx="12" cy="12" r="2.2" fill="#087dff"/></g>',
+    # The app icon (AppIcon.icns): a white "N" whose corners are network nodes.
+    "brand": '<rect x="0.5" y="0.5" width="23" height="23" rx="5.1" fill="#2f6cf2" stroke="none"/>'
+             '<path d="M6.7 17.6V6.4l10.6 11.2V6.4" stroke="#ffffff" stroke-width="2.4"/>'
+             '<g fill="#ffffff" stroke="none"><circle cx="6.7" cy="6.4" r="2.5"/>'
+             '<circle cx="17.3" cy="6.4" r="2.5"/><circle cx="6.7" cy="17.6" r="2.5"/>'
+             '<circle cx="17.3" cy="17.6" r="2.5"/></g>',
 }
 
 

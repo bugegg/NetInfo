@@ -55,6 +55,10 @@ def main(argv: list[str] | None = None) -> int:
 
     fonts.load()  # the same Inter / JetBrains Mono on macOS and Windows
 
+    from .ui import win_titlebar
+
+    win_titlebar.install(app)  # Windows: no icon at the left of the caption
+
     from .ui.main_window import MainWindow
 
     # Releases up to 1.4 stored these under the old PingInfoView name.
