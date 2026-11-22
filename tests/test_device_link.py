@@ -28,7 +28,7 @@ There is 1 interface on the system:
 
 def test_parse_airport_hides_a_redacted_name():
     assert dl.parse_airport(AIRPORT, "en0") == {
-        "link_mbps": 1297.0, "channel": "40", "band": "5 GHz", "phy": "802.11ax",
+        "link_mbps": 1297.0, "channel": "40", "band": "5 GHz", "width": "160 MHz", "phy": "802.11ax",
         "signal_dbm": -58}
     assert dl.parse_airport(AIRPORT, "awdl0") == {}
     assert dl.parse_airport({}, "en0") == {}

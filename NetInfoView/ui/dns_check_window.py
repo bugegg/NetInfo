@@ -158,6 +158,10 @@ class DnsCheckWindow(QWidget):
         super().__init__(parent, Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowTitle("DNS Check")
+        # Its own background: as a child of the main window it would
+        # otherwise show the system's (white) behind the dark theme.
+        self.setObjectName("dnsWindow")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.resize(800, 720)
         self._settings = settings
         self._thread: QThread | None = None
@@ -188,7 +192,6 @@ class DnsCheckWindow(QWidget):
         tagline.setObjectName("muted")
         self.history_button = QToolButton()
         self.history_button.setText("History")
-        self.history_button.setIcon(glyphs.icon("clock", c["ink"], 13))
         self.history_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.history_button.setIconSize(QSize(14, 14))
         self.history_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -239,10 +242,6 @@ class DnsCheckWindow(QWidget):
         self.dns_menu = QMenu(self.dns_label)
         self.dns_menu.aboutToShow.connect(self._fill_dns_menu)
         self.dns_label.setMenu(self.dns_menu)
-        self.dns_label.setStyleSheet(
-            f"QToolButton#dnsServer {{ border: none; background: transparent; color: {c['muted']};"
-            f" padding: 0; }} QToolButton#dnsServer:hover {{ color: {BLUE}; }}"
-            " QToolButton#dnsServer::menu-indicator { image: none; width: 0; }")
         card_layout.addWidget(self.dns_label, 0, Qt.AlignmentFlag.AlignRight)
         QTimer.singleShot(0, self._show_dns_servers)
 
@@ -257,7 +256,6 @@ class DnsCheckWindow(QWidget):
         titles.addWidget(result_subtitle)
         self.export_button = QToolButton()
         self.export_button.setText("Export report")
-        self.export_button.setIcon(glyphs.icon("save", c["ink"], 13))
         self.export_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.export_button.setIconSize(QSize(14, 14))
         self.export_button.clicked.connect(self.export)
@@ -331,15 +329,6 @@ class DnsCheckWindow(QWidget):
         self.tree.setColumnWidth(COL_STATUS, 140)
         self.tree.setColumnWidth(COL_ACTION, 100)
         self.tree.setColumnWidth(COL_CHEVRON, 28)
-        self.tree.setStyleSheet(f"""
-            QTreeWidget#dnsTree {{ background: {c['surface']}; border: 1px solid {c['border']};
-                border-radius: 8px; font-size: 12px; }}
-            QTreeWidget#dnsTree::item {{ border-bottom: 1px solid {c['border']}; padding: 4px 6px; }}
-            QTreeWidget#dnsTree::item:hover {{ background: {c['hover']}; }}
-            QHeaderView::section {{ background: {c['bg']}; color: {c['muted']}; border: none;
-                border-bottom: 1px solid {c['border']}; padding: 6px 8px; font-weight: 600;
-                font-size: 10px; }}
-        """)
 
         self.results = QWidget()
         results_layout = QVBoxLayout(self.results)
@@ -361,7 +350,6 @@ class DnsCheckWindow(QWidget):
         self.footer_note.setObjectName("muted")
         self.copy_button = QToolButton()
         self.copy_button.setText("Copy summary")
-        self.copy_button.setIcon(glyphs.icon("copy", c["ink"], 13))
         self.copy_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.copy_button.setIconSize(QSize(14, 14))
         self.copy_button.clicked.connect(self.copy_summary)
@@ -385,7 +373,31 @@ class DnsCheckWindow(QWidget):
         layout.addWidget(rule)
         layout.addLayout(footer)
 
+        self.apply_theme()
+
+    def apply_theme(self) -> None:
+        """Colour the window for the app's light or dark theme; called again
+        when the theme is switched while it is open."""
+        dark = bool(getattr(self._settings, "dark_background", False))
+        self._colors = c = theme_colors(dark)
+        self.history_button.setIcon(glyphs.icon("clock", c["ink"], 13))
+        self.export_button.setIcon(glyphs.icon("save", c["ink"], 13))
+        self.copy_button.setIcon(glyphs.icon("copy", c["ink"], 13))
+        self.dns_label.setStyleSheet(
+            f"QToolButton#dnsServer {{ border: none; background: transparent; color: {c['muted']};"
+            f" padding: 0; }} QToolButton#dnsServer:hover {{ color: {BLUE}; }}"
+            " QToolButton#dnsServer::menu-indicator { image: none; width: 0; }")
+        self.tree.setStyleSheet(f"""
+            QTreeWidget#dnsTree {{ background: {c['surface']}; border: 1px solid {c['border']};
+                border-radius: 8px; font-size: 12px; }}
+            QTreeWidget#dnsTree::item {{ border-bottom: 1px solid {c['border']}; padding: 4px 6px; }}
+            QTreeWidget#dnsTree::item:hover {{ background: {c['hover']}; }}
+            QHeaderView::section {{ background: {c['bg']}; color: {c['muted']}; border: none;
+                border-bottom: 1px solid {c['border']}; padding: 6px 8px; font-weight: 600;
+                font-size: 10px; }}
+        """)
         self.setStyleSheet(f"""
+            QWidget#dnsWindow {{ background: {c['bg']}; }}
             QWidget {{ font-size: 12px; }}
             QLabel#dnsBrand {{ font-size: 16px; font-weight: 700; }}
             QLabel#resultDomain {{ font-size: 17px; font-weight: 700; }}
@@ -401,6 +413,8 @@ class DnsCheckWindow(QWidget):
             QPushButton#segmentButton:checked {{ background: {rgba(BLUE, 0.16)}; color: {c['ink']};
                 font-weight: 600; }}
         """)
+        if self.report is not None and self._thread is None:
+            self._show_report(self.report)  # rows and pills in the new colours
 
     # -- running -----------------------------------------------------------------
 

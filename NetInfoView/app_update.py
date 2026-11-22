@@ -178,6 +178,12 @@ def download_and_extract(release: Release) -> Path:
     return extract_app(zip_path, work / "extracted")
 
 
+LSREGISTER = (
+    "/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+    "LaunchServices.framework/Support/lsregister"
+)
+
+
 def installer_script(
     new_app: Path, target_app: Path, pid: int, renamed_from: Path | None = None
 ) -> str:
@@ -207,6 +213,10 @@ else
     app={old_q}
 fi
 /usr/bin/xattr -dr com.apple.quarantine "$app" 2>/dev/null
+# Finder and the Dock cache the icon by path; a new mtime and a forced
+# re-registration make them pick up a changed AppIcon.icns.
+touch "$app"
+{LSREGISTER} -f "$app" 2>/dev/null
 /usr/bin/open "$app"
 rm -rf {shlex.quote(str(new_app.parent.parent))}
 """

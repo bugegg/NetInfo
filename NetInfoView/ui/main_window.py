@@ -17,6 +17,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QFileDialog,
     QFontDialog,
@@ -48,7 +49,7 @@ from ..ping.icmp import _IP_DONTFRAG
 from ..ping.network_interfaces import list_interfaces as list_network_interfaces
 from ..settings import DisplayMode, HistoryMode, Settings
 from . import fonts
-from .dashboard import Dashboard, apply_theme
+from .dashboard import Dashboard, WindowThemer, apply_theme, theme_combo_popups
 from .add_hosts_dialog import AddHostsDialog
 from .app_update_thread import UpdateCheckThread, UpdateDownloadThread
 from .device_info_thread import DeviceInfoThread
@@ -96,6 +97,9 @@ class MainWindow(QMainWindow):
         fonts.load()
         super().__init__()
         self.settings = settings
+        # Tool windows and dialogs take the app's theme as they open.
+        self._window_themer = WindowThemer(self)
+        QApplication.instance().installEventFilter(self._window_themer)
         snmp.set_community(settings.snmp_community)
         self._keys = itertools.count(1)
         self._engine: EngineThread | None = None
@@ -1410,6 +1414,12 @@ class MainWindow(QMainWindow):
         self.settings.dark_background = checked
         self._model.dark_background = checked
         self._apply_palette()
+        for window in (*self.findChildren(DnsCheckWindow), *self.findChildren(RouteMonitorWindow)):
+            window.apply_theme()
+        if checked:  # open tool windows' drop-downs, as they'd get on opening
+            for window in QApplication.topLevelWidgets():
+                if window.property("themed"):
+                    theme_combo_popups(window)
 
     def _toggle_always_on_top(self, checked: bool) -> None:
         self.settings.always_on_top = checked

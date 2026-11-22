@@ -66,6 +66,11 @@ GRAPH_LINE = QColor("#1d2330")
 GRAPH_LOSS = QColor(224, 53, 43, 217)  # #e0352b at 85%
 GRAPH_LOSS_LINE = QColor("#e0352b")
 GRAPH_GRID = QColor("#e3e5e9")
+#: The same bands, line and grid for the dark theme: deep tints of the
+#: green / amber / red, so the light line reads on them.
+GRAPH_BANDS_DARK = (QColor("#1d3326"), QColor("#3a3120"), QColor("#3d2326"))
+GRAPH_LINE_DARK = QColor("#e8edf5")
+GRAPH_GRID_DARK = QColor("#2c3747")
 CURRENT_COLOR = QColor("#0b5bd3")
 ROUTE_CHANGE_COLOR = QColor("#0b5bd3")
 GRAPHED_COLOR = QColor("#0b5bd3")
@@ -75,6 +80,22 @@ LOGGING_COLOR = GREEN
 #: The packet-loss bar in the latency column, and its label.
 LOSS_BAR = QColor(229, 56, 59, 105)
 LOSS_TEXT = QColor("#16191f")
+
+#: The latency column's colours (rows and header), for the app's theme. The
+#: theme is app-wide, so one set serves every Ping Monitor window;
+#: set_column_theme() swaps it.
+_LIGHT_COLUMN = dict(good=BAND_GOOD, warn=BAND_WARN, bad=BAND_BAD, loss_bar=LOSS_BAR,
+                     loss_text=LOSS_TEXT, whisker=QColor("#6b7280"), mark_fill=QColor("#ffffff"),
+                     current=CURRENT_COLOR, ink=QColor("#16191f"))
+_DARK_COLUMN = dict(good=QColor("#1d3326"), warn=QColor("#3a3120"), bad=QColor("#3d2326"),
+                    loss_bar=QColor(229, 56, 59, 120), loss_text=QColor("#e8edf5"),
+                    whisker=QColor("#98a5b8"), mark_fill=QColor("#1a222e"),
+                    current=QColor("#5aa2ff"), ink=QColor("#e8edf5"))
+COLUMN = dict(_LIGHT_COLUMN)
+
+
+def set_column_theme(dark: bool) -> None:
+    COLUMN.update(_DARK_COLUMN if dark else _LIGHT_COLUMN)
 
 #: Fitting the columns: room beside the text, the Name column's cap, and
 #: the width of its "● graphed" tag.
@@ -409,15 +430,15 @@ class HopDelegate(QStyledItemDelegate):
         def x(ms: float) -> float:
             return band_x(rect, ms, top)
 
-        painter.fillRect(rect, BAND_GOOD)
+        painter.fillRect(rect, COLUMN["good"])
         if top > warn:
             # To the edge when the scale stops short of Critical.
             right = x(crit) if top > crit else rect.right() + 1
             painter.fillRect(QRectF(x(warn), rect.top(), right - x(warn),
-                                    rect.height()), BAND_WARN)
+                                    rect.height()), COLUMN["warn"])
         if top > crit:
             painter.fillRect(QRectF(x(crit), rect.top(), rect.right() - x(crit),
-                                    rect.height()), BAND_BAD)
+                                    rect.height()), COLUMN["bad"])
         # Packet loss as in PingPlotter: a bar from the left edge as long as
         # the loss (the whole width is 100%), labelled, under the latency marks.
         loss = 100.0 if data["silent"] else data["loss"]
@@ -425,8 +446,8 @@ class HopDelegate(QStyledItemDelegate):
             bar = QRectF(rect.left(), rect.top() + 3, rect.width() * min(loss, 100.0) / 100,
                          rect.height() - 6)
             # Always red; "*" in the label marks a router limiting its replies.
-            painter.fillRect(bar, LOSS_BAR)
-            painter.setPen(LOSS_TEXT)
+            painter.fillRect(bar, COLUMN["loss_bar"])
+            painter.setPen(COLUMN["loss_text"])
             painter.drawText(rect.adjusted(6, 0, -6, 0), Qt.AlignmentFlag.AlignVCenter,
                              loss_text(loss, data["limited"]))
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -434,7 +455,7 @@ class HopDelegate(QStyledItemDelegate):
             painter.restore()
             return
         cy = rect.center().y()
-        painter.setPen(QPen(QColor("#6b7280"), 1.2))
+        painter.setPen(QPen(COLUMN["whisker"], 1.2))
         low, high = x(data["min"]), x(data["max"])
         painter.drawLine(QPointF(low, cy), QPointF(high, cy))
         painter.drawLine(QPointF(low, cy - 3), QPointF(low, cy + 3))
@@ -511,11 +532,11 @@ class RouteLineOverlay(QWidget):
             painter.drawLine(a, b)
         for average, cur in points:
             painter.setPen(QPen(LOSS_COLOR, 1.6))
-            painter.setBrush(QColor("#ffffff"))
+            painter.setBrush(COLUMN["mark_fill"])
             painter.drawEllipse(average, 3.6, 3.6)
             if cur is not None:
                 y = average.y()
-                painter.setPen(QPen(CURRENT_COLOR, 1.8))
+                painter.setPen(QPen(COLUMN["current"], 1.8))
                 painter.drawLine(QPointF(cur - 3.5, y - 3.5), QPointF(cur + 3.5, y + 3.5))
                 painter.drawLine(QPointF(cur + 3.5, y - 3.5), QPointF(cur - 3.5, y + 3.5))
         painter.end()
@@ -530,6 +551,10 @@ class LatencyHeader(QHeaderView):
     """The table's header, with the latency column's drawn as PingPlotter
     does: the colour bands at the rows' scale, "0 ms" at the left, the
     scale's top at the right, and "Latency" on a tab in the middle."""
+
+    #: The "Latency" tab's fill and text; None takes the palette's (light).
+    tab_color: QColor | None = None
+    tab_text: QColor | None = None
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(Qt.Orientation.Horizontal, parent)
@@ -551,17 +576,17 @@ class LatencyHeader(QHeaderView):
         area = QRectF(rect).adjusted(0, 0, 0, -1)
         if self.scale is not None:
             top, warn, crit = self.scale
-            painter.fillRect(area, BAND_GOOD)
+            painter.fillRect(area, COLUMN["good"])
             if top > warn:
                 right = band_x(area, crit, top) if top > crit else area.right() + 1
                 painter.fillRect(QRectF(band_x(area, warn, top), area.top(),
-                                        right - band_x(area, warn, top), area.height()), BAND_WARN)
+                                        right - band_x(area, warn, top), area.height()), COLUMN["warn"])
             if top > crit:
                 x = band_x(area, crit, top)
-                painter.fillRect(QRectF(x, area.top(), area.right() + 1 - x, area.height()), BAND_BAD)
+                painter.fillRect(QRectF(x, area.top(), area.right() + 1 - x, area.height()), COLUMN["bad"])
         else:
             painter.fillRect(area, self.palette().color(self.palette().ColorRole.Button))
-        ink = QColor("#16191f")
+        ink = COLUMN["ink"]
         metrics = painter.fontMetrics()
         # The tab: a trapezoid in the header's own colour under "Latency".
         title = "Latency"
@@ -575,8 +600,8 @@ class LatencyHeader(QHeaderView):
         tab.lineTo(center - tab_width / 2, area.bottom() + 1)
         tab.closeSubpath()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillPath(tab, self.palette().color(self.palette().ColorRole.Base))
-        painter.setPen(self.palette().color(self.palette().ColorRole.Text))
+        painter.fillPath(tab, self.tab_color or self.palette().color(self.palette().ColorRole.Base))
+        painter.setPen(self.tab_text or self.palette().color(self.palette().ColorRole.Text))
         painter.drawText(area, Qt.AlignmentFlag.AlignCenter, title)
         if self.scale is not None:
             painter.setPen(ink)
@@ -608,6 +633,12 @@ class RouteGraph(PingGraphWidget):
         self.no_data_color = None
         #: Shown across an empty graph: why there's nothing to draw yet.
         self.empty_text = ""
+
+    def set_dark(self, dark: bool) -> None:
+        self.band_colors = GRAPH_BANDS_DARK if dark else GRAPH_BANDS
+        self.line_color = GRAPH_LINE_DARK if dark else GRAPH_LINE
+        self.grid_color = self.frame_color = GRAPH_GRID_DARK if dark else GRAPH_GRID
+        self.update()
 
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
@@ -758,6 +789,7 @@ class RouteMonitorWindow(QWidget):
         self.graph_title = QLabel("")
         self.graph_title.setFont(bold)
         self.graph = RouteGraph()
+        self.apply_theme()
         self.graph.setMinimumHeight(170)
         lower = QWidget()
         lower_layout = QVBoxLayout(lower)
@@ -819,6 +851,18 @@ class RouteMonitorWindow(QWidget):
             self.target.setFocus()
 
     # -- running -----------------------------------------------------------
+
+    def apply_theme(self) -> None:
+        """The graph's bands and line for the app's light or dark theme."""
+        from .dashboard import theme_colors  # as selected_ink_color: no import cycle
+        dark = bool(getattr(self._settings, "dark_background", False))
+        self.graph.set_dark(dark)
+        set_column_theme(dark)
+        self.tree.viewport().update()
+        colors = theme_colors(dark) if dark else None
+        self.latency_header.tab_color = QColor(colors["surface"]) if colors else None
+        self.latency_header.tab_text = QColor(colors["ink"]) if colors else None
+        self.latency_header.viewport().update()
 
     @property
     def running(self) -> bool:

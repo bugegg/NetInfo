@@ -34,6 +34,7 @@ class DeviceLink:
     band: str = ""             # "5 GHz"
     phy: str = ""              # "802.11ax"
     channel: str = ""
+    width: str = ""            # channel width: "160 MHz"
     signal_dbm: int | None = None
     signal_percent: int | None = None  # Windows reports a percentage
     port: str = ""             # the adapter: "USB 10/100/1000 LAN", "Thunderbolt Ethernet"
@@ -163,6 +164,9 @@ def parse_airport(data: object, interface: str) -> dict:
             band = re.search(r"(\d+(?:\.\d+)?)\s*GHz", channel)
             if band:
                 out["band"] = f"{band.group(1)} GHz"
+            width = re.search(r"(\d+)\s*MHz", channel)
+            if width:
+                out["width"] = f"{width.group(1)} MHz"
         phy = str(current.get("spairport_network_phymode") or "")
         if phy.startswith("802.11"):
             out["phy"] = phy
@@ -368,7 +372,7 @@ def _windows() -> DeviceLink:
                       local_ip=ip, **fields)
 
 
-_WIFI_FIELDS = ("link_mbps", "band", "phy", "channel", "signal_dbm", "signal_percent", "ssid")
+_WIFI_FIELDS = ("link_mbps", "band", "phy", "channel", "width", "signal_dbm", "signal_percent", "ssid")
 
 
 def carry_over(previous: DeviceLink | None, current: DeviceLink) -> DeviceLink:
