@@ -966,7 +966,10 @@ class SpeedTestWindow(QWidget):
             # is in the tooltip.
             self.network_name.setText("Wi-Fi network")
             self.network_name.setToolTip(link.ssid)
-            self.band_tag.setText(link.band)
+            # "5 GHz · 160 MHz": the band and, where the system tells it
+            # (macOS does, netsh doesn't), the channel width.
+            self.band_tag.setText(" · ".join(x for x in (link.band, link.width) if x))
+            self.band_tag.setToolTip(f"Channel {link.channel}" if link.channel else "")
             self.band_tag.setVisible(bool(link.band))
             label, bars = strength(link)
             signal = (f"{link.signal_dbm} dBm" if link.signal_dbm is not None
@@ -992,6 +995,7 @@ class SpeedTestWindow(QWidget):
             if link.interface:
                 self.network_name.setToolTip(f"{link.port or link.kind} ({link.interface})")
             self.band_tag.setText(link.duplex)
+            self.band_tag.setToolTip("")
             self.band_tag.setVisible(bool(link.duplex))
             self._band_rule.setVisible(bool(link.duplex))
             up = link.active if link.active is not None else link.connected

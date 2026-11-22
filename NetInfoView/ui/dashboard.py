@@ -11,12 +11,14 @@ import socket
 import time
 from datetime import datetime
 
-from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, QSysInfo, Qt, QTimer
+from PyQt6.QtCore import (
+    QEasingCurve, QEvent, QObject, QPointF, QPropertyAnimation, QRectF, QSize, QSysInfo, Qt, QTimer, pyqtProperty,
+)
 from PyQt6.QtGui import (
     QAction, QColor, QFont, QFontInfo, QKeySequence, QPainter, QPainterPath, QPen,
 )
 from PyQt6.QtWidgets import (
-    QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
+    QAbstractButton, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy, QSpacerItem, QSplitter, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget,
     QToolButton, QToolTip, QVBoxLayout, QWidget,
 )
@@ -255,6 +257,76 @@ class MenuButton(QToolButton):
         painter = QPainter(self)
         chevron = glyphs.pixmap("chevron", self.chevron_color, 12)
         painter.drawPixmap(self.width() - 22, (self.height() - 12) // 2, chevron)
+        painter.end()
+
+
+class ThemeSwitch(QAbstractButton):
+    """Light/dark switch: a pill with the sun on the left and the moon on
+    the right; the knob slides to the one in use."""
+
+    W, H = 58, 30
+
+    def __init__(self, action: QAction) -> None:
+        super().__init__()
+        self.setCheckable(True)
+        self.setChecked(action.isChecked())
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(self.W, self.H)
+        self.setToolTip("Switch light / dark mode")
+        self._pos = 1.0 if self.isChecked() else 0.0
+        self._anim = QPropertyAnimation(self, b"knob", self)
+        self._anim.setDuration(180)
+        self._anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self.toggled.connect(self._slide)
+        self.clicked.connect(action.setChecked)
+        action.toggled.connect(self.setChecked)  # the menu item flips it too
+
+    def _get_knob(self) -> float:
+        return self._pos
+
+    def _set_knob(self, value: float) -> None:
+        self._pos = value
+        self.update()
+
+    knob = pyqtProperty(float, _get_knob, _set_knob)
+
+    def _slide(self, checked: bool) -> None:
+        self._anim.stop()
+        self._anim.setStartValue(self._pos)
+        self._anim.setEndValue(1.0 if checked else 0.0)
+        self._anim.start()
+
+    def sizeHint(self) -> QSize:
+        return QSize(self.W, self.H)
+
+    def paintEvent(self, event) -> None:
+        c = theme_colors(self.isChecked())
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        track = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
+        radius = track.height() / 2
+        painter.setPen(QPen(QColor(c["border"]), 1))
+        painter.setBrush(QColor(c["hover"]))
+        painter.drawRoundedRect(track, radius, radius)
+        icon, pad = 14, 4
+        knob_d = track.height() - 2 * 3
+        left = track.left() + 3 + self._pos * (track.width() - 6 - knob_d)
+        knob = QRectF(left, track.top() + 3, knob_d, knob_d)
+        # The idle icons sit faintly in the track; the knob covers one.
+        y = int(track.center().y() - icon / 2)
+        painter.drawPixmap(int(track.left() + 3 + (knob_d - icon) / 2), y,
+                           glyphs.pixmap("sun", c["muted"], icon))
+        painter.drawPixmap(int(track.right() - 3 - knob_d + (knob_d - icon) / 2), y,
+                           glyphs.pixmap("moon", c["muted"], icon))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(c["surface"] if self._pos < 0.5 else c["select"]))
+        painter.drawEllipse(knob)
+        name, color = ("sun", "#f59e0b") if self._pos < 0.5 else ("moon", "#9cc7ff")
+        painter.drawPixmap(int(knob.center().x() - icon / 2), y, glyphs.pixmap(name, color, icon))
+        if self.hasFocus():
+            painter.setPen(QPen(QColor(BLUE), 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(track, radius, radius)
         painter.end()
 
 
@@ -783,6 +855,9 @@ class Dashboard(QWidget):
             w.action_export, w.action_save_hosts, w.action_copy,
         ), "large")
         heading.addWidget(self.export_button)
+        heading.addSpacing(6)
+        self.theme_switch = ThemeSwitch(w.action_dark)
+        heading.addWidget(self.theme_switch)
         return heading
 
     def _toggle_button(self, icon: str, action: QAction, tip: str) -> QToolButton:
@@ -1313,12 +1388,132 @@ class Dashboard(QWidget):
             self.overview_fields[name].setText(value)
 
 
+def _check_file() -> str:
+    """A white tick for a checked box in the dark theme (from a file, as Qt
+    stylesheets want)."""
+    import tempfile
+    from pathlib import Path
+    path = Path(tempfile.gettempdir()) / "netinfoview-tick-ffffff.svg"
+    if not path.exists():
+        path.write_bytes(b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+                         b'stroke="#ffffff" stroke-width="3.2" stroke-linecap="round" '
+                         b'stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg>')
+    return path.as_posix()
+
+
+class WindowThemer(QObject):
+    """Application-wide: marks each tool window and dialog the app opens
+    (themed="true") as it is first shown, so apply_theme's rules paint its
+    background and plain widgets in the app's theme."""
+
+    def eventFilter(self, obj, event) -> bool:
+        # Each time a marked window shows, its combo boxes (some are added
+        # after it was built) get the themed drop-down in the dark theme.
+        if event.type() == QEvent.Type.Show and isinstance(obj, QWidget) and obj.property("themed"):
+            settings = getattr(self.parent(), "settings", None)
+            if getattr(settings, "dark_background", False):
+                theme_combo_popups(obj)
+        # On Polish, which comes before the window lays itself out and is
+        # shown: its children are polished after it, already marked, so the
+        # layout sizes them with the theme's padding (marking on Show left
+        # the Options form overlapping).
+        if (event.type() == QEvent.Type.Polish and isinstance(obj, QWidget) and obj.isWindow()
+                and not isinstance(obj, (QMainWindow, QMenu)) and obj.property("themed") is None
+                and obj.windowType() in (Qt.WindowType.Window, Qt.WindowType.Dialog)):
+            obj.setProperty("themed", True)
+            obj.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            obj.style().unpolish(obj)
+            obj.style().polish(obj)
+            # Children a constructor already polished (e.g. by asking for a
+            # size hint) take the marked rules now too.
+            for child in obj.findChildren(QWidget):
+                if child.testAttribute(Qt.WidgetAttribute.WA_WState_Polished):
+                    child.style().unpolish(child)
+                    child.style().polish(child)
+            settings = getattr(self.parent(), "settings", None)
+            if getattr(settings, "dark_background", False):
+                theme_combo_popups(obj)
+        return False
+
+
+def theme_combo_popups(window: QWidget) -> None:
+    """macOS draws a combo box's list as a native menu (light, laid over the
+    box, clipping long items). A plain list delegate makes it the styled
+    drop-down list the dark theme colours."""
+    for combo in window.findChildren(QComboBox):
+        if combo.itemDelegate().metaObject().className() == "QComboMenuDelegate":
+            combo.setItemDelegate(QStyledItemDelegate(combo))
+        # A list dropped below the box, not laid over it scrolled to the
+        # current item (which clipped the first one); set on the box itself,
+        # as the window-level rule doesn't reach the popup's style hint.
+        if "combobox-popup" not in combo.styleSheet():
+            combo.setStyleSheet(combo.styleSheet() + " QComboBox { combobox-popup: 0; }")
+        # Wide enough for its longest item ("TCP + UDP" was clipped).
+        view = combo.view()
+        view.setMinimumWidth(view.sizeHintForColumn(0) + 32)
+
+
+def _chevron_file(color: str) -> str:
+    """A styled combo box's arrow has to come from a file: the chevron glyph,
+    written to the temp folder once per colour."""
+    import tempfile
+    from pathlib import Path
+    path = Path(tempfile.gettempdir()) / f"netinfoview-chevron-{color.lstrip('#')}.svg"
+    if not path.exists():
+        path.write_bytes(glyphs.svg("chevron", color, 2.2))
+    return path.as_posix()
+
+
 def apply_theme(window) -> None:
     c = theme_colors(window.settings.dark_background)
     family = f"font-family: '{fonts.UI_FAMILY}';" if fonts.load() else ""
+    # Plain Qt widgets in the tool windows and dialogs (LLDP/CDP, Port Scan,
+    # Options, ...; marked themed="true" by WindowThemer) keep the system's
+    # light look unless styled: in the dark theme give them its colours.
+    # The light theme leaves them native.
+    dark_widgets = f"""
+        QWidget[themed="true"] QComboBox, QWidget[themed="true"] QLineEdit,
+        QWidget[themed="true"] QAbstractSpinBox, QWidget[themed="true"] QPlainTextEdit,
+        QWidget[themed="true"] QTextEdit {{ background: {c['surface']}; color: {c['ink']};
+            border: 1px solid {c['border']}; border-radius: 6px; padding: 3px 6px;
+            selection-background-color: {BLUE}; }}
+        QWidget[themed="true"] QComboBox:disabled, QWidget[themed="true"] QLineEdit:disabled {{
+            color: {c['muted']}; }}
+        QWidget[themed="true"] QComboBox::drop-down {{ border: none; width: 20px; }}
+        QWidget[themed="true"] QComboBox::down-arrow {{ image: url("{_chevron_file(c['muted'])}");
+            width: 12px; height: 12px; }}
+        QWidget[themed="true"] QComboBox QAbstractItemView {{ background: {c['surface']};
+            color: {c['ink']}; selection-background-color: {c['select']};
+            selection-color: {c['selected_ink']}; border: 1px solid {c['border']};
+            border-radius: 6px; outline: 0; }}
+        QWidget[themed="true"] QComboBox QAbstractItemView::item {{ padding: 3px 8px; }}
+        QWidget[themed="true"] QComboBox QFrame {{ background: {c['surface']}; border: none; }}
+        QComboBox#chartRange QAbstractItemView {{ background: {c['surface']}; color: {c['ink']};
+            selection-background-color: {c['select']}; selection-color: {c['selected_ink']};
+            border: 1px solid {c['border']}; outline: 0; }}
+        QComboBox#chartRange QAbstractItemView::item {{ padding: 3px 8px; }}
+        QComboBox#chartRange QFrame {{ background: {c['surface']}; border: none; }}
+        QWidget[themed="true"] QGroupBox {{ border: 1px solid {c['border']}; border-radius: 8px;
+            margin-top: 14px; padding: 8px; background: {c['surface']}; }}
+        QWidget[themed="true"] QGroupBox::title {{ subcontrol-origin: margin; left: 10px;
+            color: {c['muted']}; }}
+        QWidget[themed="true"] QProgressBar {{ background: {c['border']}; border: none;
+            border-radius: 4px; max-height: 8px; }}
+        QWidget[themed="true"] QProgressBar::chunk {{ background: {BLUE}; border-radius: 4px; }}
+        QWidget[themed="true"] QCheckBox::indicator {{ width: 14px; height: 14px;
+            border: 1px solid {c['muted']}; border-radius: 3px; background: {c['surface']}; }}
+        QWidget[themed="true"] QCheckBox::indicator:checked {{ background: {BLUE};
+            border-color: {BLUE}; image: url("{_check_file()}"); }}
+        QWidget[themed="true"] QAbstractScrollArea {{ background: {c['surface']}; }}
+        QWidget[themed="true"] QAbstractItemView {{ background: {c['surface']}; color: {c['ink']};
+            alternate-background-color: {c['bg']}; selection-background-color: {c['select']};
+            selection-color: {c['selected_ink']}; }}
+    """ if window.settings.dark_background else ""
     mono_family = f"font-family: '{fonts.mono().family()}';"
     window.setStyleSheet(f"""
         QMainWindow {{ background: {c['bg']}; }}
+        QWidget[themed="true"] {{ background: {c['bg']}; }}
+        QDialog[themed="true"] {{ background: {c['surface']}; }}
         QWidget {{ color: {c['ink']}; font-size: 12px; {family} }}
         QWidget[mono="true"] {{ {mono_family} }}
         QWidget#body, QWidget#inspector, QSplitter {{ background: {c['bg']}; }}
@@ -1413,10 +1608,12 @@ def apply_theme(window) -> None:
         QScrollBar:vertical {{ width: 8px; background: transparent; }}
         QScrollBar::handle:vertical {{ background: {c['border']}; border-radius: 4px; min-height: 30px; }}
         QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
-    """)
+    """ + dark_widgets)
     for table in (window._table, window._history_view):
         table.setShowGrid(False)
         table.verticalHeader().setDefaultSectionSize(24)
         table.horizontalHeader().setMinimumHeight(26)
     if hasattr(window, "_dashboard"):
         window._dashboard.apply_icons()
+    if window.settings.dark_background:
+        theme_combo_popups(window)  # the chart's time range
