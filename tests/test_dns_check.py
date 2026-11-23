@@ -556,3 +556,33 @@ def test_tlsrpt_shows_https_report_urls_whole(monkeypatch):
         "v=TLSRPTv1; rua=mailto:tls@a.test,https://reports.a.test/x"])
     assert dns_check.check_tlsrpt("a.test", resolver).summary == (
         "Reports to tls@a.test, https://reports.a.test/x")
+
+
+def test_public_resolvers_are_asked_over_tls_then_https_then_plain(monkeypatch):
+    from NetInfoView.ping import dns_check as d
+    calls = []
+    ok = d.Response(0, False, [(1, "192.0.2.1")])
+
+    def fail(*a, **k):
+        calls.append("tls")
+        raise d.DnsError("blocked")
+    monkeypatch.setattr(d, "query_tls", fail)
+    monkeypatch.setattr(d, "query_https", lambda *a, **k: calls.append("https") or ok)
+    monkeypatch.setattr(d, "query", lambda *a, **k: calls.append("plain") or ok)
+    r = d.Resolver(["1.1.1.1"])
+    assert r.values("example.com", "A") == ["192.0.2.1"] and r.transport == "DoH"
+    r.values("example.net", "A")
+    assert calls == ["tls", "https", "https"]  # a blocked DoT isn't tried again
+    plain = d.Resolver(["192.0.2.53"])
+    plain.values("example.com", "A")
+    assert calls[-1] == "plain" and plain.transport == "UDP/TCP"
+
+
+def test_ns_on_a_network_that_intercepts_dns_is_a_notice(monkeypatch):
+    from NetInfoView.ping import dns_check as d
+    r = d.Resolver(["192.0.2.53"])
+    r._intercepted = True
+    monkeypatch.setattr(r, "resolve", lambda name, rtype: d.Response(0, False, [(2, "ns1.example.com")]))
+    monkeypatch.setattr(d, "_ns_answers", lambda ns, domain, resolver: (ns, False, f"{ns} not authoritative"))
+    result = d.check_ns("example.com", r)
+    assert result.status == d.NOTICE and "directly" in result.summary

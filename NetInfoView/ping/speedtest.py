@@ -529,6 +529,9 @@ def nearest_ookla(ranked: list[tuple[ServerSpec, float | None]],
 #: first; the WebSocket answer comes from the test server itself.
 WS_CANDIDATES = 16
 WS_PINGS = 5
+#: A server that doesn't answer gives up this soon, so 16 of them can't
+#: hold the list thread for long.
+WS_TIMEOUT_S = 1.5
 
 
 def ws_ping_ms(spec: ServerSpec, count: int = WS_PINGS, timeout: float = 2.0) -> float | None:
@@ -603,7 +606,8 @@ def _ws_recv(sock) -> str:
 
 
 def ws_best(ranked: list[tuple[ServerSpec, float | None]],
-            count: int = WS_CANDIDATES) -> list[tuple[ServerSpec, float]]:
+            count: int = WS_CANDIDATES,
+            stop: threading.Event | None = None) -> list[tuple[ServerSpec, float]]:
     """The nearest `count` reachable Ookla servers, re-ranked by their
     WebSocket ping (lowest median first); those that don't answer it are
     left out. Nearest by Ookla's distance where it gave one (as
@@ -616,7 +620,11 @@ def ws_best(ranked: list[tuple[ServerSpec, float | None]],
         return []
     # One at a time: timed side by side, threads and the radio queue
     # smear them (16 at once all read ~12.6 ms). About 1-2 s in all.
-    pings = [ws_ping_ms(spec) for spec, _ in nearest]
+    pings = []
+    for spec, _ in nearest:
+        if stop is not None and stop.is_set():
+            return []  # the window closed: nobody to tell
+        pings.append(ws_ping_ms(spec, timeout=WS_TIMEOUT_S))
     answered = [(spec, ms) for (spec, _), ms in zip(nearest, pings) if ms is not None]
     return sorted(answered, key=lambda item: item[1])
 

@@ -31,6 +31,9 @@ def offline_server_list(monkeypatch):
     monkeypatch.setattr(speedtest, "fetch_servers", lambda: [s for s, _ in OFFLINE])
     monkeypatch.setattr(speedtest, "rank_servers", lambda servers, on_progress=None: OFFLINE)
     monkeypatch.setattr(speedtest, "connect_time_ms", lambda spec: 12.0)
+    # No WebSocket pings from the server-list thread: on CI they reached out
+    # to real hosts and were still running when a test's window was torn down.
+    monkeypatch.setattr(speedtest, "ws_best", lambda ranked, *a, **k: [])
     monkeypatch.setattr(provider, "fetch_provider", lambda: (True, PROVIDER))
     monkeypatch.setattr(device_link, "device_link", lambda: LINK)
     # No logos from the network: each site "has none", known from the cache.
