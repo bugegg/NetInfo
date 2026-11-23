@@ -32,3 +32,23 @@ def pytest_collection_modifyitems(config, items):
         nodeid = item.nodeid.replace("\\", "/")
         if any(nodeid.startswith(prefix) for prefix in MACOS_ONLY):
             item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def close_leftover_main_windows():
+    """Close any main window a test left open, so its EngineThread is
+    stopped and waited for here. Left to the garbage collector, a window
+    went at some arbitrary later moment with its QThread still running,
+    which aborts the whole run (a bus error on macOS, an access violation
+    on Windows)."""
+    yield
+    if "NetInfoView.ui.main_window" not in sys.modules:
+        return  # no Qt in this test
+    from PyQt6.QtWidgets import QApplication
+
+    from NetInfoView.ui.main_window import MainWindow
+    if QApplication.instance() is None:
+        return
+    for widget in QApplication.topLevelWidgets():
+        if isinstance(widget, MainWindow):
+            widget.close()

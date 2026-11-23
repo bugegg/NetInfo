@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import weakref
 import re
 import time
 
@@ -98,7 +99,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.settings = settings
         # Tool windows and dialogs take the app's theme as they open.
-        self._window_themer = WindowThemer(self, lambda: bool(self.settings.dark_background))
+        # Weakly: a lambda holding the window would tie it into a cycle
+        # through the app-wide filter. Removed again on closing.
+        me = weakref.ref(self)
+        self._window_themer = WindowThemer(
+            self, lambda: bool((window := me()) is not None and window.settings.dark_background))
         QApplication.instance().installEventFilter(self._window_themer)
         snmp.set_community(settings.snmp_community)
         self._keys = itertools.count(1)
@@ -1706,6 +1711,11 @@ class MainWindow(QMainWindow):
     # -- shutdown ----------------------------------------------------------
 
     def closeEvent(self, event) -> None:
+        # No more app-wide theming once the window goes: its widgets are
+        # torn down next, and the filter mustn't see them half-destroyed.
+        app = QApplication.instance()
+        if app is not None and self._window_themer is not None:
+            app.removeEventFilter(self._window_themer)
         if self._engine is not None:
             self._engine.stop_pinging()
             self._engine.wait(3000)
