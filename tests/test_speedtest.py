@@ -410,3 +410,35 @@ def test_cloudflare_downloads_start_under_its_limit():
     assert cloudflare.max_down == speedtest.CLOUDFLARE_MAX_DOWN < 100_000_000
     assert _Server("https://speed.example.com").max_down == speedtest.MAX_CHUNK
     assert speedtest.DOWN_CHUNK == speedtest.UP_CHUNK == 100_000_000
+
+
+def test_streams_are_added_during_the_ramp_while_each_is_busy():
+    from NetInfoView.ping.speedtest import streams_to_add
+    assert streams_to_add(300, 6, 16, 1.0, 2.0) == 3      # 50 Mbps each: half again
+    assert streams_to_add(900, 14, 16, 1.0, 2.0) == 2     # capped at 16
+    assert streams_to_add(100, 6, 16, 1.0, 2.0) == 0      # under 25 Mbps each
+    assert streams_to_add(300, 6, 16, 1.6, 2.0) == 0      # too late in the ramp
+    assert streams_to_add(300, 16, 16, 0.5, 2.0) == 0
+
+
+def test_needle_eases_through_the_ramp_then_shows_the_running_average():
+    from NetInfoView.ui.speedtest_window import NeedleSmoother
+    n = NeedleSmoother(ramp_s=1.0, alpha=1.0)
+    assert n.add(0.5, 100) == 100                        # ramp: the live speed
+    assert n.add(1.0, 300) == 300
+    assert n.add(1.1, 100) == 200                        # then the average so far
+    assert n.add(1.2, 200) == 200
+
+
+def test_ws_best_reranks_the_nearest_by_websocket_ping(monkeypatch):
+    from NetInfoView.ping import speedtest as st
+    a, b, c = (st.ServerSpec(n, f"https://{n}.example:8080", "ookla") for n in "abc")
+    pings = {a.url: 9.0, b.url: None, c.url: 6.5}  # b doesn't answer
+    monkeypatch.setattr(st, "ws_ping_ms", lambda spec, *a, **k: pings[spec.url])
+    assert st.ws_best([(a, 7.0), (b, 7.5), (c, 8.0)]) == [(c, 6.5), (a, 9.0)]
+
+
+def test_upload_uses_a_fixed_number_of_streams():
+    from NetInfoView.ping.speedtest import SpeedTestOptions
+    o = SpeedTestOptions()
+    assert (o.streams, o.max_streams, o.upload_streams, o.duration_s) == (24, 24, 7, 14.0)

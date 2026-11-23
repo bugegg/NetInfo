@@ -98,7 +98,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.settings = settings
         # Tool windows and dialogs take the app's theme as they open.
-        self._window_themer = WindowThemer(self)
+        self._window_themer = WindowThemer(self, lambda: bool(self.settings.dark_background))
         QApplication.instance().installEventFilter(self._window_themer)
         snmp.set_community(settings.snmp_community)
         self._keys = itertools.count(1)

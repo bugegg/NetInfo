@@ -15,11 +15,13 @@ Qt-free; the window runs ``run_test`` on a worker thread.
 
 from __future__ import annotations
 
+import base64
 import bisect
 import copy
 import http.client
 import json
 import math
+import os
 import random
 import re
 import socket
@@ -70,6 +72,11 @@ SLICES = 20
 TRIM_FAST = 0.10
 TRIM_SLOW = 0.20
 SAMPLE_INTERVAL_S = 0.1
+#: Stream scaling: checked every SCALE_STEP_S during the ramp (not in its
+#: last SCALE_STEP_S, so the new streams are up to speed when the average
+#: starts); more streams while each carries at least MBPS_PER_STREAM.
+SCALE_STEP_S = 0.5
+MBPS_PER_STREAM = 25.0
 PEAK_WINDOW_S = 1.0
 TIMEOUT_S = 10.0
 
@@ -90,6 +97,8 @@ class ServerSpec:
     sponsor: str = ""
     #: The sponsor's website (LibreSpeed lists it), for its logo.
     sponsor_url: str = ""
+    #: How far Ookla puts it from this IP, in km (its list is sorted by it).
+    distance_km: float | None = field(default=None, compare=False)
 
 
 CLOUDFLARE = ServerSpec("Cloudflare (nearest)", DEFAULT_SERVER)
@@ -134,10 +143,20 @@ FALLBACK_OOKLA = (
 @dataclass
 class SpeedTestOptions:
     server: str | ServerSpec = DEFAULT_SERVER
-    duration_s: float = 10.0
+    duration_s: float = 14.0
     #: Seconds of each transfer left out of the average (TCP slow start).
     ramp_s: float = 2.0
-    streams: int = 6
+    #: Download streams to start with. More are opened during the ramp while
+    #: each one carries at least MBPS_PER_STREAM, up to max_streams: one that
+    #: stalls (a Wi-Fi retry, a lost packet) then dents the total less.
+    #: speedtest.net, counted on a 330 Mbps line, held 25 for its whole
+    #: download, from the first second; starting with 8 and scaling never
+    #: got past 8 at ~150 Mbps, where each carried under MBPS_PER_STREAM.
+    streams: int = 24
+    max_streams: int = 24
+    #: Upload streams, a fixed number (speedtest.net held 7; more didn't
+    #: raise our upload). None uses `streams`.
+    upload_streams: int | None = 7
     #: Pings in the final ping phase.
     latency_count: int = 20
     #: Seconds between them, so a burst doesn't time one queue.
@@ -157,6 +176,8 @@ class TransferResult:
     #: (seconds since the phase started, Mbps over the last interval).
     samples: list[tuple[float, float]] = field(default_factory=list)
     loaded_latency_ms: float | None = None
+    #: Parallel streams it ended with.
+    streams: int = 0
 
 
 @dataclass
@@ -445,6 +466,9 @@ def parse_ookla_list(data: object, country: str = OOKLA_COUNTRY) -> list[ServerS
             country_name = str(item.get("country") or "Thailand").strip()
             sponsor = str(item.get("sponsor") or "").strip()
             https = item.get("https_functional") in (1, True, "1")
+            distance = item.get("distance")
+            distance = float(distance) if isinstance(distance, (int, float, str)) and \
+                str(distance).replace(".", "", 1).isdigit() else None
         except (KeyError, TypeError, AttributeError):
             continue
         if not host or host in seen:
@@ -452,7 +476,7 @@ def parse_ookla_list(data: object, country: str = OOKLA_COUNTRY) -> list[ServerS
         seen.add(host)
         servers.append(ServerSpec(f"{city}, {country_name} ({sponsor})",
                                   f"{'https' if https else 'http'}://{host}", "ookla",
-                                  sponsor=sponsor))
+                                  sponsor=sponsor, distance_km=distance))
     return servers
 
 
@@ -495,6 +519,106 @@ def nearest_ookla(ranked: list[tuple[ServerSpec, float | None]],
     220 Mbps up where a Bangkok Ookla server gave about 390)."""
     reachable = [(s, ms) for s, ms in ranked if s.kind == "ookla" and ms is not None]
     return sorted(reachable, key=lambda item: item[1])[:count]
+
+
+#: Automatic times this many of the nearest servers (by connect time) with
+#: Ookla's own WebSocket ping, WS_PINGS each, and tests the lowest median.
+#: That is how speedtest.net chooses: `PING <ms>` / `PONG <ms>` on
+#: wss://host:8080/ws. A TCP connect can be answered by a load balancer in
+#: front of the server, so it ranked a server whose certificate was broken
+#: first; the WebSocket answer comes from the test server itself.
+WS_CANDIDATES = 16
+WS_PINGS = 5
+
+
+def ws_ping_ms(spec: ServerSpec, count: int = WS_PINGS, timeout: float = 2.0) -> float | None:
+    """Median round trip of Ookla's WebSocket ping to `spec`, in ms; None
+    if it doesn't speak it (or can't be reached, or its TLS fails)."""
+    url = urllib.parse.urlsplit(spec.url)
+    if not url.hostname:
+        return None
+    port = url.port or (443 if url.scheme == "https" else 80)
+    try:
+        sock = socket.create_connection((url.hostname, port), timeout=timeout)
+        if url.scheme == "https":
+            sock = ssl_context().wrap_socket(sock, server_hostname=url.hostname)
+        with sock:
+            key = base64.b64encode(os.urandom(16)).decode()
+            sock.sendall((f"GET /ws HTTP/1.1\r\nHost: {url.hostname}:{port}\r\n"
+                          f"User-Agent: {_headers()['User-Agent']}\r\n"
+                          "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                          f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n")
+                         .encode())
+            head = _read_until(sock, b"\r\n\r\n")
+            if b" 101 " not in head.split(b"\r\n", 1)[0]:
+                return None
+            times = []
+            for _ in range(count):
+                start = time.perf_counter()
+                _ws_send(sock, f"PING {int(time.time() * 1000)}")
+                if not _ws_recv(sock).startswith("PONG"):
+                    return None
+                times.append((time.perf_counter() - start) * 1000)
+            return statistics.median(times)
+    except (OSError, ValueError):
+        return None
+
+
+def _read_until(sock, marker: bytes, limit: int = 65536) -> bytes:
+    data = b""
+    while marker not in data:
+        chunk = sock.recv(4096)
+        if not chunk or len(data) > limit:
+            raise OSError("connection closed")
+        data += chunk
+    return data
+
+
+def _ws_send(sock, text: str) -> None:
+    payload = text.encode()
+    mask = os.urandom(4)
+    sock.sendall(bytes([0x81, 0x80 | len(payload)]) + mask
+                 + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+
+
+def _recv_exact(sock, n: int) -> bytes:
+    data = b""
+    while len(data) < n:
+        chunk = sock.recv(n - len(data))
+        if not chunk:
+            raise OSError("connection closed")
+        data += chunk
+    return data
+
+
+def _ws_recv(sock) -> str:
+    """One text frame from the server (servers don't mask theirs)."""
+    head = _recv_exact(sock, 2)
+    length = head[1] & 0x7F
+    if length == 126:
+        length = int.from_bytes(_recv_exact(sock, 2), "big")
+    elif length == 127:
+        raise ValueError("frame too large")
+    return _recv_exact(sock, length).decode(errors="replace")
+
+
+def ws_best(ranked: list[tuple[ServerSpec, float | None]],
+            count: int = WS_CANDIDATES) -> list[tuple[ServerSpec, float]]:
+    """The nearest `count` reachable Ookla servers, re-ranked by their
+    WebSocket ping (lowest median first); those that don't answer it are
+    left out. Nearest by Ookla's distance where it gave one (as
+    speedtest.net takes the closest few), else by connect time, which is
+    noisy with a hundred servers timed at once."""
+    reachable = [(s, ms) for s, ms in ranked if s.kind == "ookla" and ms is not None]
+    nearest = sorted(reachable, key=lambda item: (
+        item[0].distance_km if item[0].distance_km is not None else float("inf"), item[1]))[:count]
+    if not nearest:
+        return []
+    # One at a time: timed side by side, threads and the radio queue
+    # smear them (16 at once all read ~12.6 ms). About 1-2 s in all.
+    pings = [ws_ping_ms(spec) for spec, _ in nearest]
+    answered = [(spec, ms) for (spec, _), ms in zip(nearest, pings) if ms is not None]
+    return sorted(answered, key=lambda item: item[1])
 
 
 def connect_time_ms(spec: ServerSpec, timeout: float = 2.0, tries: int = 2) -> float | None:
@@ -747,6 +871,18 @@ def _loaded_pinger(server: _Server, done: threading.Event, out: list[float]) -> 
         pass
 
 
+def streams_to_add(rate_mbps: float, active: int, most: int, now_s: float,
+                   ramp_s: float) -> int:
+    """How many streams to open now: while the ramp has a step left and each
+    stream carries MBPS_PER_STREAM or more, half as many again (at least 2),
+    no more than `most` in all."""
+    if now_s > ramp_s - SCALE_STEP_S or active >= most:
+        return 0
+    if rate_mbps / max(active, 1) < MBPS_PER_STREAM:
+        return 0
+    return min(most - active, max(2, active // 2))
+
+
 def run_transfer(server: _Server, upload: bool, options: SpeedTestOptions,
                  on_sample: Callable[[float, float], None] | None = None,
                  stop: threading.Event | None = None) -> TransferResult:
@@ -754,21 +890,36 @@ def run_transfer(server: _Server, upload: bool, options: SpeedTestOptions,
     done = threading.Event()
     loaded: list[float] = []
     worker = _upload_stream if upload else _download_stream
+    first = options.streams
+    most = options.max_streams
+    if upload and options.upload_streams is not None:
+        first = most = options.upload_streams
     threads = [threading.Thread(target=worker, args=(server, counter, done), daemon=True)
-               for _ in range(options.streams)]
+               for _ in range(first)]
     threads.append(threading.Thread(target=_loaded_pinger, args=(server, done, loaded),
                                     daemon=True))
     start = time.perf_counter()
     for t in threads:
         t.start()
+    active = first
+    next_scale = SCALE_STEP_S
     points = [(0.0, 0)]
     try:
         while True:
             time.sleep(SAMPLE_INTERVAL_S)
             now = time.perf_counter() - start
             points.append((now, counter.value))
+            rate = rolling_mbps(points)
             if on_sample is not None:
-                on_sample(now, rolling_mbps(points))
+                on_sample(now, rate)
+            if now >= next_scale:
+                next_scale += SCALE_STEP_S
+                more = streams_to_add(rate, active, most, now, options.ramp_s)
+                for _ in range(more):
+                    t = threading.Thread(target=worker, args=(server, counter, done), daemon=True)
+                    threads.append(t)
+                    t.start()
+                active += more
             if now >= options.duration_s or (stop is not None and stop.is_set()):
                 break
     finally:
@@ -776,6 +927,7 @@ def run_transfer(server: _Server, upload: bool, options: SpeedTestOptions,
         for t in threads:
             t.join(timeout=2)
     result = summarize(points, options.ramp_s)
+    result.streams = active
     if loaded:
         result.loaded_latency_ms = statistics.median(loaded)
     if result.bytes == 0:
