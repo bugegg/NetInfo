@@ -23,6 +23,26 @@ from . import ber
 from .dns_ptr import _read_name, system_nameservers
 
 DNS_PORT = 53
+DOT_PORT = 853
+#: Public resolvers that take encrypted queries: address -> (TLS name for
+#: DNS-over-TLS or "" if it has none, DNS-over-HTTPS URL). Their queries go
+#: over DoT, then DoH, and only then plain port 53, because some networks
+#: (True Internet, measured November 2026) redirect every port-53 query to
+#: their own resolver whatever address it's sent to; TLS can't be redirected
+#: without failing the certificate check.
+ENCRYPTED_DNS = {
+    "8.8.8.8": ("dns.google", "https://dns.google/dns-query"),
+    "8.8.4.4": ("dns.google", "https://dns.google/dns-query"),
+    "1.1.1.1": ("cloudflare-dns.com", "https://cloudflare-dns.com/dns-query"),
+    "1.0.0.1": ("cloudflare-dns.com", "https://cloudflare-dns.com/dns-query"),
+    "9.9.9.9": ("dns.quad9.net", "https://dns.quad9.net/dns-query"),
+    "149.112.112.112": ("dns.quad9.net", "https://dns.quad9.net/dns-query"),
+    "208.67.222.222": ("", "https://doh.opendns.com/dns-query"),
+    "208.67.220.220": ("", "https://doh.opendns.com/dns-query"),
+}
+#: An address no DNS server listens on (TEST-NET-2, RFC 5737): an answer
+#: from it means the network intercepts port 53.
+INTERCEPT_PROBE = "198.51.100.1"
 DEFAULT_TIMEOUT = 2.5
 CLASS_IN = 1
 TYPES = {"A": 1, "NS": 2, "CNAME": 5, "SOA": 6, "PTR": 12, "MX": 15, "TXT": 16, "AAAA": 28}
@@ -254,9 +274,69 @@ def query(name: str, rtype: str, server: str, timeout: float = DEFAULT_TIMEOUT,
     raise DnsError("no answer")
 
 
+def _parse_or_raise(message: bytes, query_id: int) -> Response:
+    try:
+        parsed = parse_response(message, query_id)
+    except (ValueError, IndexError, struct.error) as error:
+        raise DnsError("unexpected reply") from error
+    if parsed is None:
+        raise DnsError("unexpected reply")
+    return parsed[0]
+
+
+def query_tls(name: str, rtype: str, server: str, tls_name: str,
+              timeout: float = DEFAULT_TIMEOUT) -> Response:
+    """DNS-over-TLS (RFC 7858) to `server`, checking its certificate is
+    `tls_name`'s."""
+    from ..https import ssl_context
+    query_id = random.randrange(1 << 16)
+    packet = build_query(name, TYPES[rtype], query_id)
+    try:
+        with socket.create_connection((server, DOT_PORT), timeout=timeout) as raw:
+            with ssl_context().wrap_socket(raw, server_hostname=tls_name) as sock:
+                sock.sendall(struct.pack("!H", len(packet)) + packet)
+                data = b""
+                while len(data) < 2 or len(data) < 2 + struct.unpack("!H", data[:2])[0]:
+                    chunk = sock.recv(65535)
+                    if not chunk:
+                        raise DnsError("connection closed")
+                    data += chunk
+    except OSError as error:  # ssl.SSLError is one
+        raise DnsError(str(error) or "no answer") from error
+    return _parse_or_raise(data[2:2 + struct.unpack("!H", data[:2])[0]], query_id)
+
+
+def query_https(name: str, rtype: str, url: str, timeout: float = DEFAULT_TIMEOUT) -> Response:
+    """DNS-over-HTTPS (RFC 8484), the GET form."""
+    import urllib.request
+    from ..https import urlopen
+    packet = build_query(name, TYPES[rtype], 0)  # RFC 8484 asks for ID 0 (cache-friendly)
+    encoded = base64.urlsafe_b64encode(packet).decode().rstrip("=")
+    request = urllib.request.Request(f"{url}?dns={encoded}",
+                                     headers={"Accept": "application/dns-message"})
+    try:
+        with urlopen(request, timeout) as reply:
+            message = reply.read(65536)
+    except OSError as error:  # URLError and HTTPError are OSErrors
+        raise DnsError(str(error) or "no answer") from error
+    return _parse_or_raise(message, 0)
+
+
+def dns_intercepted(timeout: float = 1.0) -> bool:
+    """Whether this network answers port-53 queries itself, whatever address
+    they're sent to: then a nameserver can't be asked directly."""
+    try:
+        query("example.com", "A", INTERCEPT_PROBE, timeout)
+    except DnsError:
+        return False
+    return True
+
+
 class Resolver:
     """Recursive lookups through the given servers (default: the system's),
-    trying each in turn, with answers cached for the length of one check."""
+    trying each in turn, with answers cached for the length of one check.
+    A public resolver that supports it is asked over DNS-over-TLS, else
+    DNS-over-HTTPS, falling back to plain DNS (ENCRYPTED_DNS)."""
 
     def __init__(self, servers: list[str] | None = None, timeout: float = DEFAULT_TIMEOUT,
                  port: int = DNS_PORT) -> None:
@@ -264,6 +344,42 @@ class Resolver:
         self.timeout = timeout
         self.port = port
         self._cache: dict[tuple[str, str], Response] = {}
+        #: How the last answer came: "DoT", "DoH" or "UDP/TCP".
+        self.transport = ""
+        #: Per server, the encrypted transports that failed, not tried again.
+        self._broken: dict[str, set[str]] = {}
+        self._intercepted: bool | None = None
+
+    @property
+    def intercepted(self) -> bool:
+        """Whether this network redirects port-53 DNS (asked once)."""
+        if self._intercepted is None:
+            self._intercepted = dns_intercepted() if self.port == DNS_PORT else False
+        return self._intercepted
+
+    def _ask(self, name: str, rtype: str, server: str) -> Response:
+        encrypted = ENCRYPTED_DNS.get(server) if self.port == DNS_PORT else None
+        if encrypted:
+            tls_name, url = encrypted
+            broken = self._broken.setdefault(server, set())
+            for transport, ask in (("DoT", lambda: query_tls(name, rtype, server, tls_name,
+                                                             self.timeout) if tls_name else None),
+                                   ("DoH", lambda: query_https(name, rtype, url, self.timeout))):
+                if transport in broken:
+                    continue
+                try:
+                    response = ask()
+                except DnsError:
+                    broken.add(transport)  # blocked here: don't wait on it again
+                    continue
+                if response is None:
+                    broken.add(transport)
+                    continue
+                self.transport = transport
+                return response
+        response = query(name, rtype, server, self.timeout, port=self.port)
+        self.transport = "UDP/TCP"
+        return response
 
     def resolve(self, name: str, rtype: str) -> Response:
         key = (name.lower().rstrip("."), rtype)
@@ -274,7 +390,7 @@ class Resolver:
         last: Exception | None = None
         for server in self.servers:
             try:
-                response = query(key[0], rtype, server, self.timeout, port=self.port)
+                response = self._ask(key[0], rtype, server)
             except DnsError as error:
                 last = error
                 continue
@@ -408,6 +524,13 @@ def check_ns(domain: str, resolver: Resolver) -> CheckResult:
         probes = list(pool.map(lambda ns: _ns_answers(ns, domain, resolver), nameservers))
     bad = [note for _, ok, note in probes if not ok]
     records = [f"NS {ns}" for ns in nameservers]
+    if bad and resolver.intercepted:
+        # The answers came from the network's own resolver, not the
+        # nameservers: nothing to blame on the domain.
+        return CheckResult("ns", NOTICE, "Can't reach nameservers directly", records, [
+            "This network redirects DNS (port 53) to its own resolver, whatever address "
+            "a query is sent to, so the nameservers can't be asked themselves.",
+            "Try again on another network (or a VPN) to check them."] + bad)
     if len(bad) == len(probes):
         return CheckResult("ns", FAIL, "Nameservers don't respond", records, bad)
     if bad:

@@ -422,7 +422,15 @@ class DnsCheckWindow(QWidget):
         servers = [self.server] if self.server else dns_check.Resolver().servers[:2]
         name = next((n for n, ip in PUBLIC_DNS if ip == self.server), "")
         text = f"DNS: {', '.join(servers)}" if servers else "DNS: none configured"
-        self.dns_label.setText(f"{text}{f' ({name})' if name else ''} ▾")
+        # Encrypted where the server takes it (dns_check.ENCRYPTED_DNS):
+        # DoT, else DoH; it falls back to plain DNS if both are blocked.
+        encrypted = dns_check.ENCRYPTED_DNS.get(servers[0]) if len(servers) == 1 else None
+        via = (" · DoT" if encrypted[0] else " · DoH") if encrypted else ""
+        self.dns_label.setText(f"{text}{f' ({name})' if name else ''}{via} ▾")
+        self.dns_label.setToolTip(
+            "Change the DNS server the checks ask"
+            + ("\nAsked over encrypted DNS, which a network can't redirect"
+               if encrypted else ""))
 
     def _fill_dns_menu(self) -> None:
         menu = self.dns_menu

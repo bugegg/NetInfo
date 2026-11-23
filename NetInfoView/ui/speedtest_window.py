@@ -83,6 +83,13 @@ GAUGE_COLORS = {
 NEEDLE_SMOOTHING = 0.6
 
 
+def tabular(font: QFont) -> QFont:
+    """`font` with every digit the same width (OpenType "tnum"), so a figure
+    doesn't shift sideways as it changes."""
+    font.setFeature(QFont.Tag("tnum"), 1)
+    return font
+
+
 class NeedleSmoother:
     """What the needle and card show while a transfer runs: through the
     ramp, the last second's speed eased in (it climbs as TCP opens up);
@@ -216,15 +223,21 @@ class ServerListThread(QThread):
     #: what Automatic tests, as speedtest.net chooses.
     picked = pyqtSignal(object)  # list[(ServerSpec, ms)]
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._stop = threading.Event()
+
     def stop(self) -> None:
-        pass  # finishes within a few seconds on its own
+        # Ranking finishes within a few seconds on its own; the WebSocket
+        # pings after it stop between servers.
+        self._stop.set()
 
     def run(self) -> None:
         try:
             ranked = speedtest.rank_servers(speedtest.fetch_servers(),
                                             on_progress=self.partial.emit)
             self.loaded.emit(ranked)
-            best = speedtest.ws_best(ranked)
+            best = speedtest.ws_best(ranked, stop=self._stop)
             if best:
                 self.picked.emit(best)
         except RuntimeError:  # the app quit while it ran: nobody to tell
@@ -442,7 +455,7 @@ class Gauge(Themed, QWidget):
             p.drawText(QRectF(pt.x() - 30, pt.y() - 10, 60, 20), Qt.AlignmentFlag.AlignCenter, text)
 
         # The reading in the middle.
-        big = QFont(self.font())
+        big = tabular(QFont(self.font()))
         big.setPixelSize(max(14, int(inner * 0.5)))
         big.setWeight(QFont.Weight.Bold)
         p.setFont(big)
@@ -550,6 +563,8 @@ class Card(QFrame):
         layout.addStretch(1)
 
     def set(self, value: str, note: str = " \n ") -> None:
+        if not self.value.font().featureValue(QFont.Tag("tnum")):
+            self.value.setFont(tabular(self.value.font()))
         self.value.setText(value)
         self.note.setText(note)
         # When the notes are hidden (a short window), they still show on hover.
@@ -1213,6 +1228,7 @@ class SpeedTestWindow(QWidget):
         self._list_thread.loaded.connect(self._servers_loaded)
         self._list_thread.partial.connect(self._servers_partial)
         self._list_thread.picked.connect(self._servers_picked)
+        self._list_thread.finished.connect(self._list_finished)
         self._list_thread.start()
 
     @from_thread
@@ -1245,11 +1261,15 @@ class SpeedTestWindow(QWidget):
         if self._thread is None and same_choice(self._choice, CLOUDFLARE):
             self.set_choice(self._choice)
 
+    def _list_finished(self) -> None:
+        self._list_thread = None
+
     @from_thread
     def _servers_loaded(self, ranked) -> None:
         if self._gone():
             return
-        self._list_thread = None
+        # The thread goes on to the WebSocket pings; it's let go (and
+        # stopped, on closing) only once it has finished.
         self.picker.set_servers(ranked)
         self._set_nearest(ranked)
 
@@ -1675,7 +1695,10 @@ class SpeedTestWindow(QWidget):
                 retire(thread)
                 setattr(self, name, None)
         if self._list_thread is not None:
-            self._list_thread.loaded.disconnect()
+            for signal in (self._list_thread.loaded, self._list_thread.partial,
+                           self._list_thread.picked, self._list_thread.finished):
+                signal.disconnect()
+            self._list_thread.stop()
             retire(self._list_thread)
             self._list_thread = None
         if self._thread is not None:
