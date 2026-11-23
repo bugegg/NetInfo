@@ -55,8 +55,8 @@ def _wait(cond, timeout=10.0):
 
 def test_format_mbps():
     assert format_mbps(None) == "–"
-    assert format_mbps(1234.5) == "1,234"
-    assert format_mbps(56.78) == "56.8"
+    assert format_mbps(1234.5) == "1,234.50"
+    assert format_mbps(56.78) == "56.78"
     assert format_mbps(1.234) == "1.23"
 
 
@@ -87,7 +87,7 @@ def test_server_text_and_copy_text():
     r = SpeedResult(latency_ms=12.3, jitter_ms=1.5, meta=meta,
                     download=TransferResult(mbps=500, peak_mbps=600, loaded_latency_ms=40))
     text = result_text(r)
-    assert "Download    500 Mbps   peak 600   loaded ping 40 ms" in text
+    assert "Download    500.00 Mbps   peak 600.00   loaded ping 40 ms" in text
     assert "Ping        12 ms   jitter 1.5 ms" in text
 
 

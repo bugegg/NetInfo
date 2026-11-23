@@ -18,7 +18,9 @@ from PyQt6.QtCore import (
     QEasingCurve, QEvent, QPointF, QRectF, QSize, Qt, QThread, QVariantAnimation, pyqtSignal,
 )
 from PyQt6 import sip
-from PyQt6.QtGui import QColor, QConicalGradient, QFont, QPainter, QPainterPath, QPalette, QPen
+from PyQt6.QtGui import (
+    QColor, QConicalGradient, QFont, QFontMetricsF, QPainter, QPainterPath, QPalette, QPen,
+)
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -53,7 +55,7 @@ RED = "#e5383b"
 AMBER = "#d97706"
 
 #: (label, seconds per direction).
-DURATIONS = (("Quick · 5 s", 5.0), ("Standard · 10 s", 10.0), ("Long · 20 s", 20.0))
+DURATIONS = (("Quick · 5 s", 5.0), ("Standard · 14 s", 14.0), ("Long · 20 s", 20.0))
 DEFAULT_WINDOW = QSize(1060, 820)
 #: The gauge-and-cards panel grows no taller than this.
 TOP_PANEL_MAX = 420
@@ -81,6 +83,31 @@ GAUGE_COLORS = {
 NEEDLE_SMOOTHING = 0.6
 
 
+class NeedleSmoother:
+    """What the needle and card show while a transfer runs: through the
+    ramp, the last second's speed eased in (it climbs as TCP opens up);
+    after it, the average so far, which settles towards the result instead
+    of swinging with every Wi-Fi hiccup. The result itself is computed apart
+    (speedtest.summarize), so this changes only the display."""
+
+    def __init__(self, ramp_s: float, alpha: float = NEEDLE_SMOOTHING) -> None:
+        self.ramp_s = ramp_s
+        self.alpha = alpha
+        self.value = 0.0
+        self._sum = 0.0
+        self._count = 0
+
+    def add(self, seconds: float, mbps: float) -> float:
+        if seconds < self.ramp_s:
+            target = mbps
+        else:
+            self._sum += mbps
+            self._count += 1
+            target = self._sum / self._count
+        self.value += (target - self.value) * self.alpha
+        return self.value
+
+
 def palette(dark: bool) -> dict[str, str]:
     if dark:
         return dict(bg="#121821", panel="#1a222e", border="#2c3747", ink="#e8edf5",
@@ -98,11 +125,7 @@ def palette(dark: bool) -> dict[str, str]:
 def format_mbps(value: float | None) -> str:
     if value is None:
         return "–"
-    if value >= 100:
-        return f"{value:,.0f}"
-    if value >= 10:
-        return f"{value:.1f}"
-    return f"{value:.2f}"
+    return f"{value:,.2f}"  # 334.48, as speedtest.net shows it
 
 
 def format_ms(value: float | None) -> str:
@@ -189,14 +212,21 @@ class ServerListThread(QThread):
     loaded = pyqtSignal(object)  # list[(ServerSpec, ms | None)]
     #: The servers reached so far, ranked, while the rest are still timed.
     partial = pyqtSignal(object)
+    #: Then the nearest few re-ranked by WebSocket ping (speedtest.ws_best),
+    #: what Automatic tests, as speedtest.net chooses.
+    picked = pyqtSignal(object)  # list[(ServerSpec, ms)]
 
     def stop(self) -> None:
         pass  # finishes within a few seconds on its own
 
     def run(self) -> None:
         try:
-            self.loaded.emit(speedtest.rank_servers(speedtest.fetch_servers(),
-                                                    on_progress=self.partial.emit))
+            ranked = speedtest.rank_servers(speedtest.fetch_servers(),
+                                            on_progress=self.partial.emit)
+            self.loaded.emit(ranked)
+            best = speedtest.ws_best(ranked)
+            if best:
+                self.picked.emit(best)
         except RuntimeError:  # the app quit while it ran: nobody to tell
             pass
         except Exception:
@@ -419,6 +449,12 @@ class Gauge(Themed, QWidget):
         p.setPen(ink)
         text = ((format_ms(self.value) if self.ping else format_mbps(self.value))
                 if live else "–")
+        # Two decimals make "1,234.56": shrink the reading to fit the dial.
+        room = 1.7 * inner
+        width = QFontMetricsF(big).horizontalAdvance(text)
+        if width > room:
+            big.setPixelSize(max(12, int(big.pixelSize() * room / width)))
+            p.setFont(big)
         p.drawText(QRectF(center.x() - inner, center.y() - inner * 0.42, 2 * inner, inner * 0.6),
                    Qt.AlignmentFlag.AlignCenter, text)
         unit_font = QFont(self.font())
@@ -610,6 +646,7 @@ class SpeedTestWindow(QWidget):
         self._pings: list[float] = []
         self._show_ip = False
         self.theme = palette(self._dark())
+        self._needle = NeedleSmoother(SpeedTestOptions().ramp_s)
 
         title = _label("Speed Test", "pageTitle")
         subtitle = _label("Measure your connection performance.", "pageSubtitle")
@@ -842,7 +879,10 @@ class SpeedTestWindow(QWidget):
         settings = self._settings()
         if settings is None:
             return
-        index = self.duration.findData(float(settings.speed_test_seconds))
+        seconds = float(settings.speed_test_seconds)
+        if seconds == 10.0:  # the old Standard, now 14 s as speedtest.net runs
+            seconds = 14.0
+        index = self.duration.findData(seconds)
         if index >= 0:
             self.duration.setCurrentIndex(index)
         # The server isn't restored: every window starts on Automatic (the
@@ -1172,6 +1212,7 @@ class SpeedTestWindow(QWidget):
         self._list_thread = track(ServerListThread())
         self._list_thread.loaded.connect(self._servers_loaded)
         self._list_thread.partial.connect(self._servers_partial)
+        self._list_thread.picked.connect(self._servers_picked)
         self._list_thread.start()
 
     @from_thread
@@ -1180,8 +1221,21 @@ class SpeedTestWindow(QWidget):
             self.picker.set_servers(ranked)
             self._set_nearest(ranked)
 
+    @from_thread
+    def _servers_picked(self, best) -> None:
+        """The nearest servers re-ranked by WebSocket ping: Automatic now
+        tests the first of these."""
+        if self._gone():
+            return
+        self._ws_picked = True
+        self._use_candidates(best[:speedtest.AUTO_CANDIDATES])
+
     def _set_nearest(self, ranked) -> None:
-        nearest = speedtest.nearest_ookla(ranked, speedtest.AUTO_CANDIDATES)
+        if getattr(self, "_ws_picked", False):
+            return  # the WebSocket ranking stands
+        self._use_candidates(speedtest.nearest_ookla(ranked, speedtest.AUTO_CANDIDATES))
+
+    def _use_candidates(self, nearest) -> None:
         candidates = tuple(spec for spec, _ in nearest)
         if candidates == self._candidates:
             return
@@ -1456,6 +1510,7 @@ class SpeedTestWindow(QWidget):
             self._set_status("run", "Testing ping…")
             return
         self.gauge.set_value(0.0, phase)
+        self._needle = NeedleSmoother(self.options().ramp_s)
         self._set_status("run", {"connect": "Connecting…",
                                  "download": "Testing download…",
                                  "upload": "Testing upload…"}.get(phase, ""))
@@ -1471,7 +1526,7 @@ class SpeedTestWindow(QWidget):
             self.card_jitter.set(f"{format_ms(speedtest.jitter(self._pings))} ms"
                                  if done > 1 else "–")
             return
-        smoothed = self.gauge.value + (value - self.gauge.value) * NEEDLE_SMOOTHING
+        smoothed = self._needle.add(seconds, value)
         self.gauge.set_value(smoothed)
         card = self.card_down if phase == "download" else self.card_up
         card.set(f"{format_mbps(smoothed)} Mbps", "Measuring…\n ")

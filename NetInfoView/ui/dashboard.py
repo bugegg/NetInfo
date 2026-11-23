@@ -1406,19 +1406,36 @@ class WindowThemer(QObject):
     (themed="true") as it is first shown, so apply_theme's rules paint its
     background and plain widgets in the app's theme."""
 
+    def __init__(self, parent: QObject, is_dark) -> None:
+        super().__init__(parent)
+        #: () -> bool: whether the app is in the dark theme now.
+        self._is_dark = is_dark
+
     def eventFilter(self, obj, event) -> bool:
+        # An exception escaping an application-wide event filter makes PyQt
+        # abort the whole app (it can't hand Qt a result), so none may.
+        try:
+            self._filter(obj, event)
+        except Exception:
+            pass
+        return False
+
+    def _filter(self, obj, event) -> None:
+        kind = event.type()
+        if kind not in (QEvent.Type.Show, QEvent.Type.Polish) or not isinstance(obj, QWidget):
+            return
         # Each time a marked window shows, its combo boxes (some are added
         # after it was built) get the themed drop-down in the dark theme.
-        if event.type() == QEvent.Type.Show and isinstance(obj, QWidget) and obj.property("themed"):
-            settings = getattr(self.parent(), "settings", None)
-            if getattr(settings, "dark_background", False):
+        if kind == QEvent.Type.Show:
+            if obj.property("themed") and self._is_dark():
                 theme_combo_popups(obj)
+            return
         # On Polish, which comes before the window lays itself out and is
         # shown: its children are polished after it, already marked, so the
         # layout sizes them with the theme's padding (marking on Show left
         # the Options form overlapping).
-        if (event.type() == QEvent.Type.Polish and isinstance(obj, QWidget) and obj.isWindow()
-                and not isinstance(obj, (QMainWindow, QMenu)) and obj.property("themed") is None
+        if (obj.isWindow() and not isinstance(obj, (QMainWindow, QMenu))
+                and obj.property("themed") is None
                 and obj.windowType() in (Qt.WindowType.Window, Qt.WindowType.Dialog)):
             obj.setProperty("themed", True)
             obj.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -1430,10 +1447,8 @@ class WindowThemer(QObject):
                 if child.testAttribute(Qt.WidgetAttribute.WA_WState_Polished):
                     child.style().unpolish(child)
                     child.style().polish(child)
-            settings = getattr(self.parent(), "settings", None)
-            if getattr(settings, "dark_background", False):
+            if self._is_dark():
                 theme_combo_popups(obj)
-        return False
 
 
 def theme_combo_popups(window: QWidget) -> None:
@@ -1441,7 +1456,8 @@ def theme_combo_popups(window: QWidget) -> None:
     box, clipping long items). A plain list delegate makes it the styled
     drop-down list the dark theme colours."""
     for combo in window.findChildren(QComboBox):
-        if combo.itemDelegate().metaObject().className() == "QComboMenuDelegate":
+        delegate = combo.itemDelegate()
+        if delegate is not None and delegate.metaObject().className() == "QComboMenuDelegate":
             combo.setItemDelegate(QStyledItemDelegate(combo))
         # A list dropped below the box, not laid over it scrolled to the
         # current item (which clipped the first one); set on the box itself,
