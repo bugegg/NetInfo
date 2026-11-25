@@ -16,10 +16,23 @@ from dataclasses import dataclass
 from ..osinfo import IS_WINDOWS
 from .icmp import IcmpPinger
 from .result import PingResult, PingStatus
-from .tcp import tcp_ping
+from .tcp import first_open_port, tcp_ping
 
 #: How often batched results are flushed to the callback.
 FLUSH_INTERVAL_SECONDS = 0.25
+
+#: Ports tried when a host doesn't answer ping: many servers and firewalls
+#: drop ping but still accept connections, so they're up ("Ping blocked").
+TCP_FALLBACK_PORTS = (443, 80, 22, 3389, 445, 8080, 8443, 53, 25, 139)
+#: A host that keeps failing ping has its ports tried again this often; in
+#: between, each failed ping reuses the last answer.
+TCP_FALLBACK_EVERY_SECONDS = 30.0
+TCP_FALLBACK_TIMEOUT_MS = 1000
+#: An address no host has (TEST-NET-1, RFC 5737). A port that "accepts" a
+#: connection to it is answered by a firewall or proxy on the way (SIP and
+#: SCCP helpers answer 5060 and 2000 for every address; transparent proxies
+#: 80 and 443), so it says nothing about the host and isn't counted.
+CANARY_IP = "192.0.2.1"
 
 
 @dataclass(slots=True)
@@ -33,6 +46,8 @@ class PingTarget:
     enabled: bool = True
     #: Cached forward lookup, reused unless resolve_every_ping is on.
     resolved_ip: str = ""
+    #: Has answered ping before (in an earlier session too): see _answers_ping.
+    answers_ping: bool = False
 
     @property
     def is_tcp(self) -> bool:
@@ -92,6 +107,14 @@ class PingEngine:
         self._pending_batch: ResultBatch = []
         self._in_flight: set[int] = set()
         self._dns_cache: dict[str, str] = {}
+        #: target key -> (when its ports were last tried, the open port found).
+        self._tcp_fallback: dict[int, tuple[float, int | None]] = {}
+        #: Targets that have answered ping: ping isn't blocked for them, so a
+        #: ping they miss is a real loss, not "Ping blocked".
+        self._answers_ping: set[int] = set()
+        #: The fallback ports that something on the way answers itself (see
+        #: CANARY_IP), found once on first use.
+        self._intercepted: asyncio.Task | None = None
         self._rounds_done = 0
         self._stop_event: asyncio.Event | None = None
         self._tasks: set[asyncio.Task] = set()
@@ -193,8 +216,35 @@ class PingEngine:
             result = await self._pinger.ping(
                 ip, self._options.timeout_ms, self._options.ping_size
             )
+            if result.succeeded:
+                self._answers_ping.add(target.key)
+                self._tcp_fallback.pop(target.key, None)
+            elif not target.answers_ping and target.key not in self._answers_ping:
+                result.tcp_port = await self._open_port(target.key, ip)
         result.destination_ip = ip
         return result
+
+    async def _open_port(self, key: int, ip: str) -> int | None:
+        """A port open on a host that doesn't answer ping (see
+        TCP_FALLBACK_PORTS), tried again every TCP_FALLBACK_EVERY_SECONDS."""
+        now = time.monotonic()
+        last = self._tcp_fallback.get(key)
+        if last is not None and now - last[0] < TCP_FALLBACK_EVERY_SECONDS:
+            return last[1]
+        if self._intercepted is None:
+            self._intercepted = asyncio.ensure_future(self._find_intercepted())
+        intercepted = await asyncio.shield(self._intercepted)
+        ports = tuple(p for p in TCP_FALLBACK_PORTS if p not in intercepted)
+        port = await first_open_port(ip, ports, TCP_FALLBACK_TIMEOUT_MS) if ports else None
+        self._tcp_fallback[key] = (now, port)
+        return port
+
+    @staticmethod
+    async def _find_intercepted() -> frozenset[int]:
+        results = await asyncio.gather(*(tcp_ping(CANARY_IP, port, TCP_FALLBACK_TIMEOUT_MS)
+                                         for port in TCP_FALLBACK_PORTS))
+        return frozenset(port for port, result in zip(TCP_FALLBACK_PORTS, results)
+                         if result.succeeded)
 
     async def _resolve(self, target: PingTarget) -> str:
         """Forward-resolve the host, reusing the cache unless told not to."""

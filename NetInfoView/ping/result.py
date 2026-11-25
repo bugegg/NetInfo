@@ -71,6 +71,9 @@ class PingResult:
     destination_ip: str = ""
     #: Wall-clock time of the attempt, for the "Last Succeed/Failed On" columns.
     timestamp: float = 0.0
+    #: A TCP port that accepted a connection although the ping failed (the
+    #: host is up but filters ping); None if none did or none was tried.
+    tcp_port: int | None = None
 
     def __post_init__(self) -> None:
         if not self.timestamp:

@@ -158,6 +158,31 @@ def normalise_domain(text: str) -> str:
     return registered_domain(text)
 
 
+def parse_ip(text: str) -> str:
+    """The IP address typed ("" if it isn't one), in its canonical form."""
+    try:
+        return str(ipaddress.ip_address(text.strip().strip("[]")))
+    except ValueError:
+        return ""
+
+
+def domain_for_ip(ip: str, server: str = "", timeout: float = DEFAULT_TIMEOUT,
+                  port: int = DNS_PORT) -> tuple[str, str]:
+    """(PTR name, its registered domain) for `ip`; ("", "") when it has no
+    PTR record or the name isn't a domain."""
+    resolver = Resolver([server] if server else None, timeout, port)
+    try:
+        names = resolver.values(ipaddress.ip_address(ip).reverse_pointer, "PTR")
+    except DnsError:
+        return "", ""
+    for name in names:
+        name = str(name).rstrip(".")
+        domain = normalise_domain(name)
+        if domain:
+            return name, domain
+    return "", ""
+
+
 def build_query(name: str, qtype: int, query_id: int, recursion: bool = True) -> bytes:
     flags = 0x0100 if recursion else 0
     header = _HEADER.pack(query_id, flags, 1, 0, 0, 0)
@@ -442,6 +467,9 @@ class Report:
     #: False when DNS says the domain doesn't exist (NXDOMAIN): nothing else
     #: is checked.
     exists: bool = True
+    #: When an IP was typed instead of a domain: that IP and its PTR name.
+    ip: str = ""
+    ptr_name: str = ""
 
     def counts(self) -> dict[str, int]:
         counts = dict.fromkeys(STATUS_LABELS, 0)
@@ -1076,10 +1104,12 @@ def check_blacklist(domain: str, resolver: Resolver, ip: str = "") -> CheckResul
     """The mail servers' IPv4 addresses (and the sending IP) on IP DNSBLs,
     and the domain on domain blacklists."""
     addresses: list[str] = []
-    try:
-        hosts = [host for _, host in sorted(resolver.values(domain, "MX")) if host] or [domain]
-    except DnsError as error:
-        return _failed_lookup("blacklist", error)
+    hosts: list[str] = []
+    if domain:  # "" checks just `ip`
+        try:
+            hosts = [host for _, host in sorted(resolver.values(domain, "MX")) if host] or [domain]
+        except DnsError as error:
+            return _failed_lookup("blacklist", error)
     for host in hosts[:4]:
         try:
             addresses += [a for a in resolver.values(host, "A") if a not in addresses][:2]
@@ -1093,16 +1123,18 @@ def check_blacklist(domain: str, resolver: Resolver, ip: str = "") -> CheckResul
     addresses = [a for a in addresses if ipaddress.ip_address(a).is_global]
     jobs = [(address, name, ".".join(reversed(address.split("."))) + "." + zone)
             for address in addresses for name, zone in IP_BLACKLISTS]
-    jobs += [(domain, name, f"{domain}.{zone}") for name, zone in DOMAIN_BLACKLISTS]
+    domain_lists = DOMAIN_BLACKLISTS if domain else ()
+    jobs += [(domain, name, f"{domain}.{zone}") for name, zone in domain_lists]
     with ThreadPoolExecutor(max_workers=16) as pool:
         answers = list(pool.map(lambda job: _dnsbl(job[2], resolver), jobs))
     listed = [f"{target} on {name} ({', '.join(found)})"
               for (target, name, _), (found, _) in zip(jobs, answers) if found]
     refused = sorted({name for (_, name, _), (_, no) in zip(jobs, answers) if no})
-    checked = len(IP_BLACKLISTS) + len(DOMAIN_BLACKLISTS) - len(refused)
-    records = [f"Checked {', '.join(addresses + [domain])}"]
+    checked = len(IP_BLACKLISTS) + len(domain_lists) - len(refused)
+    targets = addresses + ([domain] if domain else [])
+    records = [f"Checked {', '.join(targets)}"] if targets else []
     details = []
-    for kind, lists in (("IP", IP_BLACKLISTS), ("domain", DOMAIN_BLACKLISTS)):
+    for kind, lists in (("IP", IP_BLACKLISTS), ("domain", domain_lists)):
         for name, _ in lists:
             results = [(target, found, no) for (target, list_name, _), (found, no)
                        in zip(jobs, answers) if list_name == name]
@@ -1122,6 +1154,9 @@ def check_blacklist(domain: str, resolver: Resolver, ip: str = "") -> CheckResul
     if listed:
         return CheckResult("blacklist", FAIL, f"Listed on {len(listed)} blocklist"
                            f"{'s' if len(listed) != 1 else ''}", records, details)
+    if not addresses and not domain:
+        return CheckResult("blacklist", PASS, "Private IP: not on public blocklists", records,
+                           ["Blocklists only list public (Internet) addresses."])
     if not addresses:
         return CheckResult("blacklist", NOTICE, "No mail server IP to check", records,
                            details + ["Only the domain was checked."])
@@ -1227,3 +1262,32 @@ def check_domain(domain: str, server: str = "", selectors: list[str] | None = No
             if on_result is not None:
                 on_result(result)
     return Report(domain=domain, results=[found[key] for key in CHECKS], server=server)
+
+
+#: What's checked for an IP whose PTR names no existing domain.
+IP_CHECKS = ("ptr", "blacklist")
+
+
+def check_ip(ip: str, server: str = "", selectors: list[str] | None = None,
+             timeout: float = DEFAULT_TIMEOUT, port: int = DNS_PORT,
+             on_result=None) -> Report:
+    """An IP typed in place of a domain. The domain its PTR names gets every
+    check, with `ip` as the sending IP; when there's no PTR, or it names a
+    domain that doesn't exist, the IP's own checks (PTR, blocklists) still run."""
+    name, domain = domain_for_ip(ip, server, timeout, port)
+    if domain:
+        report = check_domain(domain, server, selectors, ip, timeout, port, on_result)
+        if report.exists:
+            report.ip, report.ptr_name = ip, name
+            return report
+    resolver = Resolver([server] if server else None, timeout, port)
+    found: dict[str, CheckResult] = {}
+    with ThreadPoolExecutor(max_workers=len(IP_CHECKS)) as pool:
+        futures = [pool.submit(run_check, key, "", resolver, selectors, ip) for key in IP_CHECKS]
+        for future in as_completed(futures):
+            result = future.result()
+            found[result.key] = result
+            if on_result is not None:
+                on_result(result)
+    return Report(domain=ip, results=[found[key] for key in IP_CHECKS], server=server,
+                  ip=ip, ptr_name=name)

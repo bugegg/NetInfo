@@ -635,6 +635,7 @@ class RouteGraph(PingGraphWidget):
         self.empty_text = ""
 
     def set_dark(self, dark: bool) -> None:
+        super().set_dark(dark)
         self.band_colors = GRAPH_BANDS_DARK if dark else GRAPH_BANDS
         self.line_color = GRAPH_LINE_DARK if dark else GRAPH_LINE
         self.grid_color = self.frame_color = GRAPH_GRID_DARK if dark else GRAPH_GRID

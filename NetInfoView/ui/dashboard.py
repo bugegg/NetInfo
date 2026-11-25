@@ -15,7 +15,8 @@ from PyQt6.QtCore import (
     QEasingCurve, QEvent, QObject, QPointF, QPropertyAnimation, QRectF, QSize, QSysInfo, Qt, QTimer, pyqtProperty,
 )
 from PyQt6.QtGui import (
-    QAction, QColor, QFont, QFontInfo, QKeySequence, QPainter, QPainterPath, QPen,
+    QAction, QColor, QCursor, QFont, QFontInfo, QGuiApplication, QKeySequence, QPainter, QPainterPath, QPalette,
+    QPen,
 )
 from PyQt6.QtWidgets import (
     QAbstractButton, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
@@ -134,6 +135,8 @@ def status_badge(entry) -> tuple[str, str, str]:
         return "Pending", "#fff1d1", "#8a5a00"
     if entry.last_status.succeeded:
         return "Online", "#dcf6e4", "#15803d"
+    if entry.ping_blocked:
+        return "Ping blocked", "#ffedd5", "#c2410c"
     return "Offline", "#fde2e2", "#c62828"
 
 
@@ -232,6 +235,72 @@ class TextDelegate(QStyledItemDelegate):
                 size.setPixelSize(QFontInfo(option.font).pixelSize())
                 font = self._mono_fonts[key] = fonts.mono(size)
             option.font = font
+
+
+class CopyDelegate(TextDelegate):
+    """A TextDelegate whose hovered cell shows a small copy box at its right
+    end; clicking the box puts the cell's text on the clipboard."""
+
+    #: The box's side and its gap from the cell's right edge, in px.
+    BOX = 20
+    MARGIN = 4
+
+    def __init__(self, parent=None, mono: bool = False, empty: str = "—"):
+        super().__init__(parent, mono=mono)
+        self.empty = empty
+        self._icons: dict[str, object] = {}
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        if option.text == "—":
+            option.text = self.empty
+
+    @staticmethod
+    def cell_text(index) -> str:
+        return str(index.data(Qt.ItemDataRole.DisplayRole) or "").strip()
+
+    def box_rect(self, cell) -> QRectF:
+        rect = QRectF(cell)
+        return QRectF(rect.right() - self.MARGIN - self.BOX,
+                      rect.center().y() - self.BOX / 2, self.BOX, self.BOX)
+
+    def _hovered(self, option, index) -> bool:
+        view = option.widget
+        if view is None or not self.cell_text(index):
+            return False
+        pos = view.viewport().mapFromGlobal(QCursor.pos())
+        return view.viewport().rect().contains(pos) and view.indexAt(pos) == index
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        if not self._hovered(option, index):
+            return
+        box = self.box_rect(option.rect)
+        text = option.palette.color(QPalette.ColorRole.Text)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(text.red(), text.green(), text.blue(), 60), 1))
+        painter.setBrush(option.palette.color(QPalette.ColorRole.Base))
+        painter.drawRoundedRect(box.adjusted(0.5, 0.5, -0.5, -0.5), 5, 5)
+        color = text.name()
+        icon = self._icons.get(color)
+        if icon is None:
+            icon = self._icons[color] = glyphs.pixmap("copy", color, 12)
+        painter.setOpacity(0.75)
+        painter.drawPixmap(box.center() - QPointF(6, 6), icon)
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index):
+        if (event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
+                             QEvent.Type.MouseButtonDblClick)
+                and event.button() == Qt.MouseButton.LeftButton
+                and self.cell_text(index)
+                and self.box_rect(option.rect).contains(event.position())):
+            if event.type() == QEvent.Type.MouseButtonRelease:
+                QGuiApplication.clipboard().setText(self.cell_text(index))
+                QToolTip.showText(QCursor.pos(), "Copied", option.widget)
+            return True  # the click is the box's, not a row selection
+        return super().editorEvent(event, model, option, index)
 
 
 class TimeDelegate(TextDelegate):
@@ -1007,9 +1076,14 @@ class Dashboard(QWidget):
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         table.setItemDelegateForColumn(column_index("last_status"), StatusDelegate(table))
         table.setItemDelegateForColumn(column_index("last_rtt"), TextDelegate(table, " ms"))
-        table.setItemDelegateForColumn(column_index("hostname"), TextDelegate(table))
+        # Text cells show a copy box while hovered (CopyDelegate).
+        table.setMouseTracking(True)
+        table.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        table.setItemDelegateForColumn(column_index("hostname"), CopyDelegate(table))
+        for key in ("dns_name", "vendor"):
+            table.setItemDelegateForColumn(column_index(key), CopyDelegate(table, empty=""))
         for key in ("ip_address", "mac_address"):
-            table.setItemDelegateForColumn(column_index(key), TextDelegate(table, mono=True))
+            table.setItemDelegateForColumn(column_index(key), CopyDelegate(table, mono=True))
         table.setFrameShape(QFrame.Shape.NoFrame)
         table.setObjectName("grid")
 
@@ -1300,8 +1374,8 @@ class Dashboard(QWidget):
     def refresh(self, *_):
         w = self.window
         entries = w._model.entries()
-        online = sum(e.last_status is not None and e.last_status.succeeded for e in entries)
-        offline = sum(e.last_status is not None and not e.last_status.succeeded for e in entries)
+        online = sum(e.is_up for e in entries)
+        offline = sum(e.last_status is not None and not e.is_up for e in entries)
         rtts = [e.last_rtt_ms for e in entries
                 if e.last_status is not None and e.last_status.succeeded and e.last_rtt_ms is not None]
         values = (str(len(entries)), str(online), str(offline),

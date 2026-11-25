@@ -841,6 +841,7 @@ class MainWindow(QMainWindow):
             window = PingGraphWindow(
                 list(keys), self._samples, self._describe_host, self,
                 timeout_ms=lambda: self.settings.ping_timeout_ms,
+                dark=lambda: self.settings.dark_background,
             )
             window.destroyed.connect(self._on_graph_window_destroyed)
             self._graph_window = window
@@ -1266,7 +1267,7 @@ class MainWindow(QMainWindow):
         for entry in self._model.entries():
             if not entry.ip_address:
                 continue
-            if entry.last_status is None or not entry.last_status.succeeded:
+            if not entry.is_up:
                 continue
             fully_resolved = (
                 entry.mac_address and entry.hostname and entry.dns_name and entry.vendor
@@ -1419,7 +1420,8 @@ class MainWindow(QMainWindow):
         self.settings.dark_background = checked
         self._model.dark_background = checked
         self._apply_palette()
-        for window in (*self.findChildren(DnsCheckWindow), *self.findChildren(RouteMonitorWindow)):
+        for window in (*self.findChildren(DnsCheckWindow), *self.findChildren(RouteMonitorWindow),
+                       *self.findChildren(PingGraphWindow)):
             window.apply_theme()
         if checked:  # open tool windows' drop-downs, as they'd get on opening
             for window in QApplication.topLevelWidgets():
