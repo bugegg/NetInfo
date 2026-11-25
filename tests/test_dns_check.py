@@ -146,6 +146,48 @@ def test_normalise_domain():
         assert dns_check.normalise_domain(bad) == ""
 
 
+def test_parse_ip():
+    assert dns_check.parse_ip(" 116.68.150.181 ") == "116.68.150.181"
+    assert dns_check.parse_ip("[2001:DB8::1]") == "2001:db8::1"
+    for bad in ("", "example.com", "1.2.3", "300.1.1.1"):
+        assert dns_check.parse_ip(bad) == ""
+
+
+def test_domain_for_ip(monkeypatch):
+    answers = {"181.150.68.116.in-addr.arpa": ["mail.example.co.th."]}
+    monkeypatch.setattr(dns_check.Resolver, "values",
+                        lambda self, name, rtype: answers.get(name, []))
+    assert dns_check.domain_for_ip("116.68.150.181") == ("mail.example.co.th", "example.co.th")
+    assert dns_check.domain_for_ip("192.0.2.1") == ("", "")
+
+
+def test_check_ip_checks_the_ptr_domain(dns_server):
+    report = dns_check.check_ip("192.0.2.25", "127.0.0.1", timeout=1, port=dns_server)
+    assert (report.domain, report.ip, report.ptr_name) == ("good.test", "192.0.2.25", "mail.good.test")
+    assert [r.key for r in report.results] == list(dns_check.CHECKS)
+    assert report.result("ptr").status == dns_check.PASS
+
+
+def test_check_ip_without_a_domain(dns_server):
+    seen = []
+    report = dns_check.check_ip("192.0.2.99", "127.0.0.1", timeout=1, port=dns_server,
+                                on_result=seen.append)
+    assert report.domain == report.ip == "192.0.2.99" and report.exists
+    assert [r.key for r in report.results] == list(dns_check.IP_CHECKS)
+    assert sorted(r.key for r in seen) == sorted(dns_check.IP_CHECKS)
+    assert report.result("ptr").status == dns_check.FAIL
+    assert report.result("blacklist").summary.startswith("Private IP")
+
+
+def test_blacklist_for_an_ip_alone(monkeypatch):
+    asked = []
+    monkeypatch.setattr(dns_check, "_dnsbl", lambda name, resolver: asked.append(name) or ([], False))
+    result = dns_check.check_blacklist("", dns_check.Resolver(), "116.68.150.181")
+    assert result.status == dns_check.PASS and result.records == ["Checked 116.68.150.181"]
+    assert asked and all(name.startswith("181.150.68.116.") for name in asked)
+    assert not any("(domain)" in line for line in result.details)
+
+
 def test_parse_spf():
     good = dns_check.parse_spf("v=spf1 ip4:192.0.2.0/24 ip6:2001:db8::/32 include:x.test mx -all")
     assert not good.errors and good.lookups == 2 and good.all_qualifier == "-"

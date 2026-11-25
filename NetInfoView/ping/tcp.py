@@ -39,6 +39,13 @@ async def tcp_ping(ip: str, port: int, timeout_ms: int) -> PingResult:
                 pass
 
 
+async def first_open_port(ip: str, ports: tuple[int, ...], timeout_ms: int) -> int | None:
+    """The first of `ports` (in order) that accepts a connection, tried all
+    at once; None if none does."""
+    results = await asyncio.gather(*(tcp_ping(ip, port, timeout_ms) for port in ports))
+    return next((port for port, result in zip(ports, results) if result.succeeded), None)
+
+
 def _status_for_connect_error(exc: OSError) -> PingStatus:
     if exc.errno in (errno.ENETUNREACH, errno.ENETDOWN):
         return PingStatus.NET_UNREACHABLE

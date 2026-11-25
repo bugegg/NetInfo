@@ -54,6 +54,20 @@ LINE_COLOR = QColor("#111111")
 LOSS_COLOR = QColor("#e8231d")
 JITTER_COLOR = QColor("#8b1a1a")
 JITTER_SCALE_COLOR = QColor("#e07020")
+FRAME_COLOR = QColor("#888888")
+HOVER_COLOR = QColor(0, 0, 0, 120)
+PLOT_COLOR = QColor("#ffffff")
+
+#: The same in the dark theme (matching the dashboard's theme_colors).
+DARK_BANDS = (QColor("#1d3326"), QColor("#3a3120"), QColor("#3d2326"))
+DARK_NO_DATA_COLOR = QColor("#232b36")
+DARK_GRID_COLOR = QColor(255, 255, 255, 34)
+DARK_LINE_COLOR = QColor("#e8edf5")
+DARK_FRAME_COLOR = QColor("#2c3747")
+DARK_HOVER_COLOR = QColor(255, 255, 255, 140)
+DARK_PLOT_COLOR = QColor("#1a222e")
+DARK_JITTER_COLOR = QColor("#ff8a80")
+DARK_LOSS_LINE_COLOR = QColor("#ff6b6b")
 
 #: Top of the packet-loss axis, in percent, and how many recent pings each
 #: point of the loss line is averaged over.
@@ -130,6 +144,14 @@ class _TimeAxisWidget(QWidget):
         #: When this host was first pinged (as far as the kept history goes):
         #: only the time before it is greyed out as having no data.
         self.first_seen: float | None = None
+        self.dark = False
+        self.tick_color = GRID_COLOR
+
+    def set_dark(self, dark: bool) -> None:
+        """Colours for the app's light or dark theme."""
+        self.dark = dark
+        self.tick_color = DARK_GRID_COLOR if dark else GRID_COLOR
+        self.update()
 
     def set_samples(self, samples: list[Sample], end: float) -> None:
         self._samples = samples
@@ -167,7 +189,7 @@ class _TimeAxisWidget(QWidget):
         first = max(0, (int(self._start()) // step + 1) * step)
         for stamp in range(first, int(self._end) + 1, step):
             x = self._x_for(stamp, plot)
-            painter.setPen(QPen(GRID_COLOR, 1))
+            painter.setPen(QPen(self.tick_color, 1))
             painter.drawLine(QPointF(x, plot.bottom() - 4), QPointF(x, plot.bottom() + 3))
             if self.margin_bottom < MARGIN_BOTTOM:
                 continue  # time labels hidden: ticks only
@@ -214,7 +236,8 @@ class JitterWidget(_TimeAxisWidget):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         plot = self._plot_rect()
-        painter.fillRect(plot, QColor("#ffffff"))
+        dark = self.dark
+        painter.fillRect(plot, DARK_PLOT_COLOR if dark else PLOT_COLOR)
         points = [(t, j) for t, j in rolling_jitter(self._samples) if t >= self._start()]
         scale = nice_ceiling(max((j for _, j in points), default=0.0))
         # The scale line sits about a third down, leaving headroom for spikes.
@@ -225,7 +248,8 @@ class JitterWidget(_TimeAxisWidget):
 
         painter.setFont(self._small_font())
         y_scale = y_for(scale)
-        painter.setPen(QPen(QColor(0, 0, 0, 140), 1, Qt.PenStyle.DashLine))
+        painter.setPen(QPen(DARK_HOVER_COLOR if dark else QColor(0, 0, 0, 140), 1,
+                            Qt.PenStyle.DashLine))
         painter.drawLine(QPointF(plot.left(), y_scale), QPointF(plot.right(), y_scale))
         painter.setPen(JITTER_SCALE_COLOR)
         painter.drawText(
@@ -233,7 +257,8 @@ class JitterWidget(_TimeAxisWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
             f"{scale:g}",
         )
-        painter.setPen(JITTER_COLOR)
+        jitter_color = DARK_JITTER_COLOR if dark else JITTER_COLOR
+        painter.setPen(jitter_color)
         painter.drawText(
             QRectF(plot.left(), y_scale - 8, plot.width(), 16),
             Qt.AlignmentFlag.AlignCenter,
@@ -246,12 +271,12 @@ class JitterWidget(_TimeAxisWidget):
                 point = QPointF(self._x_for(stamp, plot), y_for(jitter))
                 path.moveTo(point) if i == 0 else path.lineTo(point)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setPen(QPen(JITTER_COLOR, 1.2))
+            painter.setPen(QPen(jitter_color, 1.2))
             painter.setClipRect(plot)
             painter.drawPath(path)
             painter.setClipping(False)
 
-        painter.setPen(QPen(QColor("#888888"), 1))
+        painter.setPen(QPen(DARK_FRAME_COLOR if dark else FRAME_COLOR, 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(plot)
         painter.end()
@@ -277,12 +302,24 @@ class PingGraphWidget(_TimeAxisWidget):
         self.loss_color = LOSS_COLOR
         self.loss_line_color = LOSS_COLOR.darker(130)
         self.grid_color = GRID_COLOR
-        self.frame_color = QColor("#888888")
+        self.frame_color = FRAME_COLOR
+        self.hover_color = HOVER_COLOR
         #: Greys out the time before the first ping; None leaves the bands.
         self.no_data_color: QColor | None = NO_DATA_COLOR
         #: The ping timeout. A lost ping is stamped when it timed out, so it
         #: was really sent up to this long before its timestamp.
         self.timeout_seconds = 3.0
+
+    def set_dark(self, dark: bool) -> None:
+        self.band_colors = DARK_BANDS if dark else (GOOD_COLOR, WARN_COLOR, BAD_COLOR)
+        self.line_color = DARK_LINE_COLOR if dark else LINE_COLOR
+        self.grid_color = DARK_GRID_COLOR if dark else GRID_COLOR
+        self.frame_color = DARK_FRAME_COLOR if dark else FRAME_COLOR
+        self.hover_color = DARK_HOVER_COLOR if dark else HOVER_COLOR
+        self.loss_line_color = DARK_LOSS_LINE_COLOR if dark else LOSS_COLOR.darker(130)
+        if self.no_data_color is not None:
+            self.no_data_color = DARK_NO_DATA_COLOR if dark else NO_DATA_COLOR
+        super().set_dark(dark)
 
     # -- geometry ------------------------------------------------------------
 
@@ -471,7 +508,7 @@ class PingGraphWidget(_TimeAxisWidget):
         if sample is None:
             return
         x = self._x_for(sample.timestamp, plot)
-        painter.setPen(QPen(QColor(0, 0, 0, 120), 1, Qt.PenStyle.DashLine))
+        painter.setPen(QPen(self.hover_color, 1, Qt.PenStyle.DashLine))
         painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()))
         if sample.rtt_ms is not None:
             y = self._y_for(sample.rtt_ms, top_ms, plot)
@@ -595,10 +632,13 @@ class PingGraphWindow(QWidget):
         describe: Callable[[int], tuple[str, str] | None],
         parent: QWidget | None = None,
         timeout_ms: Callable[[], int] = lambda: 3000,
+        dark: Callable[[], bool] = lambda: False,
     ) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self._store = store
+        #: Whether the app is in its dark theme now (see apply_theme).
+        self._dark = dark
         #: The current ping timeout, which places lost pings on the graph.
         self._timeout_ms = timeout_ms
         #: key -> (display name, IP), or None once the host has been removed.
@@ -618,6 +658,10 @@ class PingGraphWindow(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(self._body)
+        # The window's own (themed) background shows through, not white.
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        scroll.viewport().setAutoFillBackground(False)
+        self._body.setAutoFillBackground(False)
         #: Moves every panel back in time together: its value is where the
         #: graphs end, in seconds after the earliest moment it can show, so
         #: the right-hand end is now and dragging left goes back. (Inverted
@@ -683,11 +727,29 @@ class PingGraphWindow(QWidget):
                 strip.installEventFilter(self)
             self._column.insertWidget(len(self.panels), panel)
             self.panels.append(panel)
+        self.apply_theme()
         wanted = min(900, len(self.panels) * PANEL_HEIGHT + 80)
         if self.height() < wanted:
             self.resize(self.width(), wanted)
         self._fit_panels()
         self.refresh()
+
+    def apply_theme(self) -> None:
+        """The graphs' colours for the app's light or dark theme."""
+        dark = self._dark()
+        for panel in self.panels:
+            for strip in (panel.jitter, panel.graph):
+                strip.set_dark(dark)
+        self.time_axis.set_dark(dark)
+        # macOS draws the history bar white whatever the theme.
+        self.history_bar.setStyleSheet(
+            "QScrollBar:horizontal { background: #1a222e; height: 12px; border: none; }"
+            "QScrollBar::handle:horizontal { background: #3a4659; border-radius: 4px;"
+            " min-width: 40px; margin: 2px; }"
+            "QScrollBar::handle:horizontal:hover { background: #4b5a70; }"
+            "QScrollBar::add-line, QScrollBar::sub-line { width: 0; }"
+            "QScrollBar::add-page, QScrollBar::sub-page { background: none; }"
+            if dark else "")
 
     def _fit_panels(self) -> None:
         """Share the window's height between the panels: full size while they

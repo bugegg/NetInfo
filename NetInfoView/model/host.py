@@ -61,6 +61,8 @@ class HostEntry:
     max_consecutive_failed_seconds: float = 0.0
 
     last_status: PingStatus | None = None
+    #: A TCP port that answered while ping failed (PingResult.tcp_port).
+    open_tcp_port: int | None = None
     last_rtt_ms: float | None = None
     last_ttl: int | None = None
     min_rtt_ms: float | None = None
@@ -95,6 +97,18 @@ class HostEntry:
     def is_tcp(self) -> bool:
         return self.port is not None
 
+    @property
+    def ping_blocked(self) -> bool:
+        """Ping fails but a TCP port answers: up, just filtering ping."""
+        return (self.last_status is not None and not self.last_status.succeeded
+                and self.open_tcp_port is not None)
+
+    @property
+    def is_up(self) -> bool:
+        """Answers ping, or a TCP port when it doesn't (ping_blocked)."""
+        return self.last_status is not None and (self.last_status.succeeded
+                                                 or self.open_tcp_port is not None)
+
     def to_target(self) -> PingTarget:
         return PingTarget(
             key=self.key,
@@ -102,6 +116,7 @@ class HostEntry:
             port=self.port,
             enabled=self.enabled,
             resolved_ip=self.ip_address,
+            answers_ping=self.succeed_count > 0,
         )
 
     # -- statistics --------------------------------------------------------
@@ -111,6 +126,7 @@ class HostEntry:
         self.last_status = result.status
         self.last_rtt_ms = result.rtt_ms
         self.last_ttl = result.ttl
+        self.open_tcp_port = None if result.succeeded else result.tcp_port
         if result.reply_ip:
             self.reply_ip = result.reply_ip
         if result.destination_ip:
@@ -157,6 +173,7 @@ class HostEntry:
         self.max_consecutive_failed = 0
         self.max_consecutive_failed_seconds = 0.0
         self.last_status = None
+        self.open_tcp_port = None
         self.last_rtt_ms = None
         self.last_ttl = None
         self.min_rtt_ms = None

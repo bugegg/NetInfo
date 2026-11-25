@@ -68,6 +68,15 @@ class DnsCheckThread(QThread):
                                               on_result=self.result.emit))
 
 
+class IpCheckThread(DnsCheckThread):
+    """DnsCheckThread for an IP typed in place of a domain (dns_check.check_ip)."""
+
+    def run(self) -> None:
+        ip, server, selectors, _, port = self._args
+        self.done.emit(dns_check.check_ip(ip, server, selectors, port=port,
+                                          on_result=self.result.emit))
+
+
 class SingleCheckThread(QThread):
     """Re-runs one check (DKIM with a selector, PTR with an IP)."""
     done = pyqtSignal(object)  # dns_check.CheckResult
@@ -215,10 +224,10 @@ class DnsCheckWindow(QWidget):
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(14, 10, 14, 8)
         card_layout.setSpacing(4)
-        card_layout.addWidget(QLabel("Domain"))
+        card_layout.addWidget(QLabel("Domain or IP"))
         self.domain = QLineEdit()
         self.domain.setObjectName("domainField")
-        self.domain.setPlaceholderText("example.com")
+        self.domain.setPlaceholderText("example.com or 203.0.113.10")
         self.domain.setClearButtonEnabled(True)
         self.domain.returnPressed.connect(self.start)
         self.check_button = QToolButton()
@@ -476,10 +485,16 @@ class DnsCheckWindow(QWidget):
     def start(self) -> None:
         if self._thread is not None:
             return
-        domain = dns_check.normalise_domain(self.domain.text())
+        # An IP checks the domain its reverse DNS (PTR) names, with the IP as
+        # the sending IP; without one, just the IP's PTR and blocklists.
+        typed_ip = dns_check.parse_ip(self.domain.text())
+        if typed_ip:
+            self.sending_ip = typed_ip
+        domain = typed_ip or dns_check.normalise_domain(self.domain.text())
         if not domain:
-            self._message(f"\"{self.domain.text().strip()}\" is not a domain name."
-                          if self.domain.text().strip() else "Type a domain, e.g. example.com.")
+            self._message(f"\"{self.domain.text().strip()}\" is not a domain name or IP."
+                          if self.domain.text().strip()
+                          else "Type a domain or IP, e.g. example.com.")
             return
         server, selectors, ip = self._inputs()
         self.domain.setText(domain)
@@ -488,7 +503,8 @@ class DnsCheckWindow(QWidget):
         self.check_button.setEnabled(False)
         self.check_button.setText("Checking…")
         self._show_pending(domain)
-        self._thread = track(DnsCheckThread(domain, server, selectors, ip, self.dns_port))
+        thread_class = IpCheckThread if typed_ip else DnsCheckThread
+        self._thread = track(thread_class(domain, server, selectors, ip, self.dns_port))
         self._thread.result.connect(self._show_live)
         self._thread.done.connect(self._show_report)
         self._thread.start()
@@ -545,6 +561,12 @@ class DnsCheckWindow(QWidget):
             for button in (self.copy_button, self.export_button):
                 button.setEnabled(False)
             return
+        # An IP whose PTR names no existing domain: only its own checks ran.
+        for key in [k for k in self._items if report.result(k) is None]:
+            index = self.tree.indexOfTopLevelItem(self._items[key])
+            if index >= 0:
+                self._take_row(index)
+            self._items.pop(key, None)
         # Rows already shown as they came in stay as they are (and stay open
         # if they were opened); any missing are filled in.
         shown = {r.key for r in live.results} if live is not None else set()
@@ -560,7 +582,17 @@ class DnsCheckWindow(QWidget):
         self._apply_filter()
         self._update_expand_button()
         self._show_dns_servers()
-        self.footer_note.setText(f"Checked {report.domain}")
+        self.result_domain.setText(report.domain)
+        self.setWindowTitle(f"DNS Check — {report.domain}")
+        if not report.ip:
+            self.footer_note.setText(f"Checked {report.domain}")
+        elif report.domain != report.ip:
+            self.footer_note.setText(f"Checked {report.ip} → {report.ptr_name} → {report.domain}")
+        elif report.ptr_name:
+            self.footer_note.setText(f"Checked {report.ip} only: its PTR {report.ptr_name} "
+                                     "names a domain that doesn't exist")
+        else:
+            self.footer_note.setText(f"Checked {report.ip} only: no PTR name to find a domain by")
         for button in (self.copy_button, self.export_button):
             button.setEnabled(True)
 
@@ -920,7 +952,9 @@ class DnsCheckWindow(QWidget):
         if item is not None:
             self.tree.removeItemWidget(item, COL_ACTION)
             self._set_pill(item, None)
-        thread = track(SingleCheckThread(key, self.report.domain, server, selectors, ip,
+        # An IP-only report has no domain to check (dns_check.check_ip).
+        domain = "" if self.report.domain == self.report.ip else self.report.domain
+        thread = track(SingleCheckThread(key, domain, server, selectors, ip,
                                          self.dns_port))
         self._single[key] = thread
         thread.done.connect(self._show_single)

@@ -66,6 +66,11 @@ class HostTableModel(QAbstractTableModel):
             return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         if role == Qt.ItemDataRole.BackgroundRole:
             return self._background(index.row())
+        if (role == Qt.ItemDataRole.ToolTipRole and column.key == "last_status"
+                and entry.ping_blocked):
+            return (f"No reply to ping ({entry.last_status.value}), but TCP port "
+                    f"{entry.open_tcp_port} accepts connections: the host is up "
+                    "and filters ping.")
         return None
 
     def _background(self, row: int):
@@ -241,5 +246,5 @@ class HostFilterProxy(QSortFilterProxyModel):
         if entry.last_status is None:
             return False
         if self.display_mode is DisplayMode.SUCCEEDED:
-            return entry.last_status.succeeded
-        return not entry.last_status.succeeded
+            return entry.is_up
+        return not entry.is_up
