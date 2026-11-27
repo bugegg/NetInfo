@@ -49,6 +49,8 @@ GRID_COLUMNS = {
     "dns_name": ("DNS Name", 170),
     "mac_address": ("MAC address", 158),
     "vendor": ("Vendor", 180),
+    "serial": ("Serial", 140),
+    "model": ("Model", 150),
     "mtu": ("MTU", 56),
     "total_sent": ("Total", 64),
     "succeed_count": ("Succeed", 76),
@@ -997,7 +999,7 @@ class Dashboard(QWidget):
         filters.setSpacing(8)
         self.search = QLineEdit()
         self.search.setObjectName("search")
-        self.search.setPlaceholderText("Search by hostname, IP or MAC")
+        self.search.setPlaceholderText("Search by hostname, IP, MAC or serial")
         self.search.setClearButtonEnabled(True)
         self.search.setMinimumWidth(140)
         self.search.textChanged.connect(self.search_changed)
@@ -1299,6 +1301,7 @@ class Dashboard(QWidget):
         w = self.window
         for action, name in ((w.action_graph, "chart"), (w.action_repeat_ping, "repeatping"),
                              (w.action_trace_mtu, "mtu"), (w.action_net_path, "netpath"),
+                             (w.action_dns_check_host, "dns"),
                              (w.action_route_monitor, "ping"), (w.action_ssh, "terminal"),
                              (w.action_telnet, "telnet"), (w.action_open_http, "globe"),
                              (w.action_open_https, "lock"), (w.action_rdp, "devices"),

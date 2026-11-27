@@ -346,7 +346,7 @@ def test_dns_server_menu(window, monkeypatch):  # noqa: F811
     w = DnsCheckWindow(window.settings, window)
     w._fill_dns_menu()
     labels = [a.text() for a in w.dns_menu.actions() if not a.isSeparator()]
-    assert labels[0] == "System default" and labels[-1] == "Custom…"
+    assert labels[0] == "System default" and "Custom…" in labels
     assert "Cloudflare (1.1.1.1)" in labels
     w.dns_menu.actions()[2].trigger()  # Cloudflare
     assert w.server == "1.1.1.1" and window.settings.dns_check_server == "1.1.1.1"
@@ -358,6 +358,54 @@ def test_dns_server_menu(window, monkeypatch):  # noqa: F811
     w.set_server("")
     assert window.settings.dns_check_server == ""
     w.close()
+
+
+def test_dns_protocol_menu(window, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(window.settings, "save", lambda: None)
+    w = DnsCheckWindow(window.settings, window)
+    w.set_server("8.8.8.8")
+    w._fill_dns_menu()
+    actions = {a.text().split(" ")[0]: a for a in w.dns_menu.actions() if a.isCheckable()}
+    assert actions["Auto"].isChecked() and w.dns_label.text().endswith("· DoT ▾")
+    actions["Cleartext"].trigger()
+    assert w.protocol == window.settings.dns_check_protocol == "plain"
+    assert w.dns_label.text().endswith("· Cleartext ▾")
+    w.set_protocol("DoH")
+    assert w.dns_label.text().endswith("· DoH ▾")
+    w.set_server("208.67.222.222")  # OpenDNS: DoH but no DoT
+    w._fill_dns_menu()
+    actions = {a.text().split(" ")[0]: a for a in w.dns_menu.actions() if a.isCheckable()}
+    assert not actions["DoT"].isEnabled() and actions["DoH"].isChecked()
+    w.set_protocol("DoT")
+    assert w._protocol() == "auto"  # OpenDNS has no DoT
+    w.set_server("")
+    w.set_protocol("auto")
+    w.close()
+
+
+def test_resolver_forced_protocol(monkeypatch):
+    from NetInfoView.ping import dns_check as d
+    calls = []
+    ok = d.Response(0, False, [(1, "192.0.2.1")])
+
+    def fail(*a, **k):
+        calls.append("tls")
+        raise d.DnsError("blocked")
+    monkeypatch.setattr(d, "query_tls", fail)
+    monkeypatch.setattr(d, "query_https", lambda *a, **k: calls.append("https") or ok)
+    monkeypatch.setattr(d, "query", lambda *a, **k: calls.append("plain") or ok)
+    plain = d.Resolver(["1.1.1.1"], protocol="plain")
+    assert plain.values("example.com", "A") == ["192.0.2.1"] and plain.transport == "UDP/TCP"
+    assert calls == ["plain"]
+    with pytest.raises(d.DnsError):  # DoT only: no fallback
+        d.Resolver(["1.1.1.1"], protocol="DoT").values("example.com", "A")
+    assert calls == ["plain", "tls"]
+    doh = d.Resolver(["1.1.1.1"], protocol="DoH")
+    doh.values("example.com", "A")
+    assert doh.transport == "DoH" and calls[-1] == "https"
+    with pytest.raises(d.DnsError):
+        d.Resolver(["192.0.2.53"], protocol="DoH").values("example.com", "A")
+    assert d.protocols_for("208.67.222.222") == ("auto", "DoH", "plain")
 
 
 def test_sidebar_button(window):  # noqa: F811
@@ -393,11 +441,19 @@ def test_blacklist_listed(dns_server, monkeypatch):
     monkeypatch.setattr(resolver, "values", values)
     result = dns_check.check_blacklist("good.test", resolver, "8.8.8.8")
     assert result.status == dns_check.FAIL and result.summary == "Listed on 1 blocklist"
-    assert result.details == [
-        "✓ Spamhaus ZEN (IP): Passed", "✗ SpamCop (IP): Listed 8.8.8.8 (127.0.0.2)",
-        "✓ Barracuda (IP): Passed", "✓ PSBL (IP): Passed", "✓ UCEPROTECT L1 (IP): Passed",
-        "✓ Mailspike (IP): Passed", "✓ Spamhaus DBL (domain): Passed",
-        "✓ SURBL (domain): Passed"]
+    assert result.details[:4] == [
+        "✗ SpamCop (IP): Listed 8.8.8.8 (127.0.0.2)", "✓ Spamhaus ZEN (IP): Passed",
+        "✓ Barracuda (IP): Passed", "✓ PSBL (IP): Passed"]
+    assert len(result.details) == len(dns_check.IP_BLACKLISTS) + 2
+    assert result.details[-2:] == ["✓ Spamhaus DBL (domain): Passed", "✓ SURBL (domain): Passed"]
+
+
+def test_dnsbl_listed_answers(monkeypatch):
+    resolver = dns_check.Resolver(["127.0.0.1"])
+    monkeypatch.setattr(resolver, "values", lambda name, rtype: ["127.0.0.1", "127.0.0.4"])
+    assert dns_check._dnsbl("1.2.3.4.hostkarma.junkemailfilter.com", resolver) == ([], False)
+    assert dns_check._dnsbl("1.2.3.4.dnsbl.spfbl.net", resolver) == ([], False)
+    assert dns_check._dnsbl("1.2.3.4.bl.spamcop.net", resolver)[0] == ["127.0.0.1", "127.0.0.4"]
 
 
 def test_provider_tables():

@@ -35,6 +35,14 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture(autouse=True)
+def no_snmp_serial_lookups(monkeypatch):
+    """Device-info sweeps don't ask real hosts for serials over SNMP (each
+    one waits out timeouts); tests that need it patch it themselves."""
+    from NetInfoView.ping import device_info
+    monkeypatch.setattr(device_info, "lookup_serial", lambda ip, communities: None)
+
+
+@pytest.fixture(autouse=True)
 def close_leftover_main_windows():
     """Close any main window a test left open, so its EngineThread is
     stopped and waited for here. Left to the garbage collector, a window

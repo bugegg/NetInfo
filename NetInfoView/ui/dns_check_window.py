@@ -58,23 +58,23 @@ class DnsCheckThread(QThread):
     done = pyqtSignal(object)  # dns_check.Report
 
     def __init__(self, domain: str, server: str, selectors: list[str], ip: str,
-                 port: int = dns_check.DNS_PORT) -> None:
+                 port: int = dns_check.DNS_PORT, protocol: str = "auto") -> None:
         super().__init__()
-        self._args = (domain, server, selectors, ip, port)
+        self._args = (domain, server, selectors, ip, port, protocol)
 
     def run(self) -> None:
-        domain, server, selectors, ip, port = self._args
+        domain, server, selectors, ip, port, protocol = self._args
         self.done.emit(dns_check.check_domain(domain, server, selectors, ip, port=port,
-                                              on_result=self.result.emit))
+                                              on_result=self.result.emit, protocol=protocol))
 
 
 class IpCheckThread(DnsCheckThread):
     """DnsCheckThread for an IP typed in place of a domain (dns_check.check_ip)."""
 
     def run(self) -> None:
-        ip, server, selectors, _, port = self._args
+        ip, server, selectors, _, port, protocol = self._args
         self.done.emit(dns_check.check_ip(ip, server, selectors, port=port,
-                                          on_result=self.result.emit))
+                                          on_result=self.result.emit, protocol=protocol))
 
 
 class SingleCheckThread(QThread):
@@ -82,13 +82,14 @@ class SingleCheckThread(QThread):
     done = pyqtSignal(object)  # dns_check.CheckResult
 
     def __init__(self, key: str, domain: str, server: str, selectors: list[str], ip: str,
-                 port: int = dns_check.DNS_PORT) -> None:
+                 port: int = dns_check.DNS_PORT, protocol: str = "auto") -> None:
         super().__init__()
-        self._args = (key, domain, server, selectors, ip, port)
+        self._args = (key, domain, server, selectors, ip, port, protocol)
 
     def run(self) -> None:
-        key, domain, server, selectors, ip, port = self._args
-        resolver = dns_check.Resolver([server] if server else None, port=port)
+        key, domain, server, selectors, ip, port, protocol = self._args
+        resolver = dns_check.Resolver([server] if server else None, port=port,
+                                      protocol=protocol)
         self.done.emit(dns_check.run_check(key, domain, resolver, selectors, ip))
 
 
@@ -188,6 +189,8 @@ class DnsCheckWindow(QWidget):
         #: The DNS server asked ("" for the system's; tests use a fake one),
         #: picked from the DNS menu under the domain field.
         self.server = getattr(settings, "dns_check_server", "")
+        #: How it's asked (dns_check.PROTOCOLS), from the same menu.
+        self.protocol = getattr(settings, "dns_check_protocol", "auto")
 
         # -- header: brand, what it is, History ------------------------------------
         logo = QLabel()
@@ -434,12 +437,25 @@ class DnsCheckWindow(QWidget):
         # Encrypted where the server takes it (dns_check.ENCRYPTED_DNS):
         # DoT, else DoH; it falls back to plain DNS if both are blocked.
         encrypted = dns_check.ENCRYPTED_DNS.get(servers[0]) if len(servers) == 1 else None
-        via = (" · DoT" if encrypted[0] else " · DoH") if encrypted else ""
+        protocol = self._protocol()
+        if protocol == "auto":
+            via = (" · DoT" if encrypted[0] else " · DoH") if encrypted else ""
+        else:
+            via = f" · {dns_check.PROTOCOL_LABELS[protocol]}"
+            encrypted = encrypted if protocol != "plain" else None
         self.dns_label.setText(f"{text}{f' ({name})' if name else ''}{via} ▾")
         self.dns_label.setToolTip(
-            "Change the DNS server the checks ask"
+            "Change the DNS server the checks ask, and how"
             + ("\nAsked over encrypted DNS, which a network can't redirect"
                if encrypted else ""))
+
+    def _protocol(self) -> str:
+        """The chosen protocol, or "auto" when this server doesn't take it."""
+        servers = [self.server] if self.server else []
+        if self.protocol == "plain" or (servers and self.protocol in
+                                        dns_check.protocols_for(servers[0])):
+            return self.protocol
+        return "auto"
 
     def _fill_dns_menu(self) -> None:
         menu = self.dns_menu
@@ -454,6 +470,21 @@ class DnsCheckWindow(QWidget):
             action.triggered.connect(lambda _=False, s=server: self.set_server(s))
         menu.addSeparator()
         menu.addAction("Custom…").triggered.connect(self._ask_server)
+        menu.addSeparator()
+        menu.addSection("Protocol")
+        takes = dns_check.protocols_for(self.server) if self.server else ("auto", "plain")
+        current = self._protocol()
+        for protocol in dns_check.PROTOCOLS:
+            label = dns_check.PROTOCOL_LABELS[protocol]
+            if protocol == "auto":
+                label += " (DoT → DoH → Cleartext)"
+            elif protocol == "plain":
+                label += " (UDP/TCP port 53)"
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(protocol == current)
+            action.setEnabled(protocol in takes)
+            action.triggered.connect(lambda _=False, p=protocol: self.set_protocol(p))
 
     def _ask_server(self) -> None:
         text, ok = QInputDialog.getText(self, "DNS server", "IP address of the DNS server to ask:",
@@ -475,6 +506,16 @@ class DnsCheckWindow(QWidget):
         self._show_dns_servers()
         if self._settings is not None:
             self._settings.dns_check_server = server
+        self._save()
+        if self.report is not None and self._thread is None:
+            self.start()
+
+    def set_protocol(self, protocol: str) -> None:
+        """Ask over `protocol` (dns_check.PROTOCOLS) from now on, and check again."""
+        self.protocol = protocol
+        self._show_dns_servers()
+        if self._settings is not None:
+            self._settings.dns_check_protocol = protocol
         self._save()
         if self.report is not None and self._thread is None:
             self.start()
@@ -504,7 +545,8 @@ class DnsCheckWindow(QWidget):
         self.check_button.setText("Checking…")
         self._show_pending(domain)
         thread_class = IpCheckThread if typed_ip else DnsCheckThread
-        self._thread = track(thread_class(domain, server, selectors, ip, self.dns_port))
+        self._thread = track(thread_class(domain, server, selectors, ip, self.dns_port,
+                                          self._protocol()))
         self._thread.result.connect(self._show_live)
         self._thread.done.connect(self._show_report)
         self._thread.start()
@@ -955,7 +997,7 @@ class DnsCheckWindow(QWidget):
         # An IP-only report has no domain to check (dns_check.check_ip).
         domain = "" if self.report.domain == self.report.ip else self.report.domain
         thread = track(SingleCheckThread(key, domain, server, selectors, ip,
-                                         self.dns_port))
+                                         self.dns_port, self._protocol()))
         self._single[key] = thread
         thread.done.connect(self._show_single)
         thread.start()

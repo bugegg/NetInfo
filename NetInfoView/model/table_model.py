@@ -235,6 +235,7 @@ class HostFilterProxy(QSortFilterProxyModel):
             for value in (
                 entry.host, entry.ip_address, entry.hostname, entry.mac_address,
                 entry.dns_name, entry.vendor, entry.description, entry.group,
+                entry.serial, entry.model,
             )
         ):
             return False

@@ -43,11 +43,21 @@ def _raise_file_descriptor_limit() -> None:
         pass
 
 
+def use_western_digits() -> None:
+    """Spin boxes and other number widgets show 0-9 whatever the system's
+    region: a Thai Windows locale otherwise turns port 443 into ๔๔๓. The
+    app's text is English, so its numbers follow English (US)."""
+    from PyQt6.QtCore import QLocale
+
+    QLocale.setDefault(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
     _raise_file_descriptor_limit()
 
     app = QApplication(argv)
+    use_western_digits()
     app.setApplicationName(APPLICATION)
     app.setOrganizationName(ORGANISATION)
 
