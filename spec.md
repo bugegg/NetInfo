@@ -587,7 +587,7 @@ There is no menu bar; everything else is in this menu.
   - Blocklist — the first IPv4 addresses of up to four MX hosts (plus the
     sending IP) on ~50 IP DNSBLs (Spamhaus ZEN, SpamCop, Barracuda, PSBL,
     UCEPROTECT L1-3, Mailspike and MXToolbox's other keyless public lists;
-    listed and unanswered lists shown first) and the domain on Spamhaus DBL and SURBL.
+    listed and unanswered lists shown first) and the domain on Spamhaus DBL, SURBL and SEM Fresh / URI / URIRED.
     127.255.255.x (Spamhaus) and SURBL's 127.0.0.1 mean the list refuses
     this resolver (public DNS): a notice, not a listing.
     Details give one line per list, marked ✓ Passed, ✗ Listed <ip> (<answer>),

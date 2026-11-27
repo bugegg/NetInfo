@@ -125,7 +125,6 @@ IP_BLACKLISTS = (
     ("Schulte", "rbl.schulte.org"),
     ("SEM Backscatter", "backscatter.spameatingmonkey.net"),
     ("SEM Black", "bl.spameatingmonkey.net"),
-    ("Sender Score", "bl.score.senderscore.com"),
     ("ServicesNet", "korea.services.net"),
     ("Suomispam", "bl.suomispam.net"),
     ("SWINOG", "dnsrbl.swinog.ch"),
@@ -145,7 +144,13 @@ LISTED_ANSWERS = {"hostkarma.junkemailfilter.com": {"127.0.0.2"},
 #: item's own result; the window draws the matching status icon in its place.
 DETAIL_MARKS = {"✓": PASS, "✗": FAIL, "!": NOTICE, "–": INPUT}
 #: Domain blacklists asked about the domain itself.
-DOMAIN_BLACKLISTS = (("Spamhaus DBL", "dbl.spamhaus.org"), ("SURBL", "multi.surbl.org"))
+DOMAIN_BLACKLISTS = (
+    ("Spamhaus DBL", "dbl.spamhaus.org"),
+    ("SURBL", "multi.surbl.org"),
+    ("SEM Fresh", "fresh.spameatingmonkey.net"),  # newly registered domains
+    ("SEM URI", "uribl.spameatingmonkey.net"),
+    ("SEM URIRED", "urired.spameatingmonkey.net"),
+)
 
 _HEADER = struct.Struct("!HHHHHH")
 _RR = struct.Struct("!HHIH")

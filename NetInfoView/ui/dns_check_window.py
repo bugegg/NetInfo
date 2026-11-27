@@ -254,7 +254,20 @@ class DnsCheckWindow(QWidget):
         self.dns_menu = QMenu(self.dns_label)
         self.dns_menu.aboutToShow.connect(self._fill_dns_menu)
         self.dns_label.setMenu(self.dns_menu)
-        card_layout.addWidget(self.dns_label, 0, Qt.AlignmentFlag.AlignRight)
+        # How it's asked, in a menu of its own beside the server's.
+        self.protocol_button = QToolButton()
+        self.protocol_button.setObjectName("dnsServer")
+        self.protocol_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.protocol_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.protocol_menu = QMenu(self.protocol_button)
+        self.protocol_menu.aboutToShow.connect(self._fill_protocol_menu)
+        self.protocol_button.setMenu(self.protocol_menu)
+        dns_row = QHBoxLayout()
+        dns_row.setSpacing(14)
+        dns_row.addStretch(1)
+        dns_row.addWidget(self.dns_label)
+        dns_row.addWidget(self.protocol_button)
+        card_layout.addLayout(dns_row)
         QTimer.singleShot(0, self._show_dns_servers)
 
         # -- results: title, export, chips, filter, table ----------------------------
@@ -395,10 +408,12 @@ class DnsCheckWindow(QWidget):
         self.history_button.setIcon(glyphs.icon("clock", c["ink"], 13))
         self.export_button.setIcon(glyphs.icon("save", c["ink"], 13))
         self.copy_button.setIcon(glyphs.icon("copy", c["ink"], 13))
-        self.dns_label.setStyleSheet(
-            f"QToolButton#dnsServer {{ border: none; background: transparent; color: {c['muted']};"
-            f" padding: 0; }} QToolButton#dnsServer:hover {{ color: {BLUE}; }}"
-            " QToolButton#dnsServer::menu-indicator { image: none; width: 0; }")
+        for button in (self.dns_label, self.protocol_button):
+            button.setStyleSheet(
+                f"QToolButton#dnsServer {{ border: none; background: transparent;"
+                f" color: {c['muted']}; padding: 0; }}"
+                f" QToolButton#dnsServer:hover {{ color: {BLUE}; }}"
+                " QToolButton#dnsServer::menu-indicator { image: none; width: 0; }")
         self.tree.setStyleSheet(f"""
             QTreeWidget#dnsTree {{ background: {c['surface']}; border: 1px solid {c['border']};
                 border-radius: 8px; font-size: 12px; }}
@@ -437,23 +452,31 @@ class DnsCheckWindow(QWidget):
         # Encrypted where the server takes it (dns_check.ENCRYPTED_DNS):
         # DoT, else DoH; it falls back to plain DNS if both are blocked.
         encrypted = dns_check.ENCRYPTED_DNS.get(servers[0]) if len(servers) == 1 else None
+        self.dns_label.setText(f"{text}{f' ({name})' if name else ''} ▾")
+        self.dns_label.setToolTip("Change the DNS server the checks ask")
         protocol = self._protocol()
         if protocol == "auto":
-            via = (" · DoT" if encrypted[0] else " · DoH") if encrypted else ""
+            # Encrypted where the server takes it: DoT, else DoH, falling
+            # back to plain DNS if both are blocked.
+            via = ("DoT" if encrypted[0] else "DoH") if encrypted else "Cleartext"
+            label = f"Auto · {via}"
         else:
-            via = f" · {dns_check.PROTOCOL_LABELS[protocol]}"
+            label = dns_check.PROTOCOL_LABELS[protocol]
             encrypted = encrypted if protocol != "plain" else None
-        self.dns_label.setText(f"{text}{f' ({name})' if name else ''}{via} ▾")
-        self.dns_label.setToolTip(
-            "Change the DNS server the checks ask, and how"
+        self.protocol_button.setText(f"{label} ▾")
+        self.protocol_button.setToolTip(
+            "Change how the DNS server is asked"
             + ("\nAsked over encrypted DNS, which a network can't redirect"
                if encrypted else ""))
 
+    def _protocol_server(self) -> str:
+        """The one server asked (the system's own when it has just one)."""
+        servers = [self.server] if self.server else dns_check.Resolver().servers
+        return servers[0] if len(servers) == 1 else ""
+
     def _protocol(self) -> str:
         """The chosen protocol, or "auto" when this server doesn't take it."""
-        servers = [self.server] if self.server else []
-        if self.protocol == "plain" or (servers and self.protocol in
-                                        dns_check.protocols_for(servers[0])):
+        if self.protocol in dns_check.protocols_for(self._protocol_server()):
             return self.protocol
         return "auto"
 
@@ -470,9 +493,11 @@ class DnsCheckWindow(QWidget):
             action.triggered.connect(lambda _=False, s=server: self.set_server(s))
         menu.addSeparator()
         menu.addAction("Custom…").triggered.connect(self._ask_server)
-        menu.addSeparator()
-        menu.addSection("Protocol")
-        takes = dns_check.protocols_for(self.server) if self.server else ("auto", "plain")
+
+    def _fill_protocol_menu(self) -> None:
+        menu = self.protocol_menu
+        menu.clear()
+        takes = dns_check.protocols_for(self._protocol_server())
         current = self._protocol()
         for protocol in dns_check.PROTOCOLS:
             label = dns_check.PROTOCOL_LABELS[protocol]

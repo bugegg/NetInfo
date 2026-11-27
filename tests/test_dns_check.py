@@ -364,17 +364,18 @@ def test_dns_protocol_menu(window, monkeypatch):  # noqa: F811
     monkeypatch.setattr(window.settings, "save", lambda: None)
     w = DnsCheckWindow(window.settings, window)
     w.set_server("8.8.8.8")
-    w._fill_dns_menu()
-    actions = {a.text().split(" ")[0]: a for a in w.dns_menu.actions() if a.isCheckable()}
-    assert actions["Auto"].isChecked() and w.dns_label.text().endswith("· DoT ▾")
+    w._fill_protocol_menu()
+    actions = {a.text().split(" ")[0]: a for a in w.protocol_menu.actions() if a.isCheckable()}
+    assert actions["Auto"].isChecked() and w.protocol_button.text() == "Auto · DoT ▾"
+    assert w.dns_label.text() == "DNS: 8.8.8.8 (Google) ▾"
     actions["Cleartext"].trigger()
     assert w.protocol == window.settings.dns_check_protocol == "plain"
-    assert w.dns_label.text().endswith("· Cleartext ▾")
+    assert w.protocol_button.text() == "Cleartext ▾"
     w.set_protocol("DoH")
-    assert w.dns_label.text().endswith("· DoH ▾")
+    assert w.protocol_button.text() == "DoH ▾"
     w.set_server("208.67.222.222")  # OpenDNS: DoH but no DoT
-    w._fill_dns_menu()
-    actions = {a.text().split(" ")[0]: a for a in w.dns_menu.actions() if a.isCheckable()}
+    w._fill_protocol_menu()
+    actions = {a.text().split(" ")[0]: a for a in w.protocol_menu.actions() if a.isCheckable()}
     assert not actions["DoT"].isEnabled() and actions["DoH"].isChecked()
     w.set_protocol("DoT")
     assert w._protocol() == "auto"  # OpenDNS has no DoT
@@ -444,8 +445,11 @@ def test_blacklist_listed(dns_server, monkeypatch):
     assert result.details[:4] == [
         "✗ SpamCop (IP): Listed 8.8.8.8 (127.0.0.2)", "✓ Spamhaus ZEN (IP): Passed",
         "✓ Barracuda (IP): Passed", "✓ PSBL (IP): Passed"]
-    assert len(result.details) == len(dns_check.IP_BLACKLISTS) + 2
-    assert result.details[-2:] == ["✓ Spamhaus DBL (domain): Passed", "✓ SURBL (domain): Passed"]
+    assert len(result.details) == len(dns_check.IP_BLACKLISTS) + len(dns_check.DOMAIN_BLACKLISTS)
+    assert result.details[-5:] == [
+        "✓ Spamhaus DBL (domain): Passed", "✓ SURBL (domain): Passed",
+        "✓ SEM Fresh (domain): Passed", "✓ SEM URI (domain): Passed",
+        "✓ SEM URIRED (domain): Passed"]
 
 
 def test_dnsbl_listed_answers(monkeypatch):
