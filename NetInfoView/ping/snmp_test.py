@@ -1,6 +1,7 @@
 """Test SNMP: ask one host for its MIB-II "system" group (name, description,
 uptime, contact, location) with a given community, to check that SNMP is
-on and the community is right. One GET over UDP 161, built by hand with
+on and the community is right; then its serial number and model (ENTITY-MIB,
+else the printer MIB or a vendor's own). One GET over UDP 161, built by hand with
 ping/ber.py like ping/snmp.py and ping/snmp_arp.py.
 """
 
@@ -32,7 +33,37 @@ SYSTEM_OIDS: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("Location", (1, 3, 6, 1, 2, 1, 1, 6, 0)),
 )
 
+#: ENTITY-MIB entPhysicalSerialNum / entPhysicalModelName columns, walked
+#: for the first part with a serial (usually the chassis).
+ENT_SERIAL = (1, 3, 6, 1, 2, 1, 47, 1, 1, 1, 1, 11)
+ENT_MODEL = (1, 3, 6, 1, 2, 1, 47, 1, 1, 1, 1, 13)
+#: entPhysicalClass: chassis(3) is each switch of a stack.
+ENT_CLASS = (1, 3, 6, 1, 2, 1, 47, 1, 1, 1, 1, 5)
+CLASS_CHASSIS = "3"
+#: Rows walked looking for a serial before giving up.
+WALK_LIMIT = 40
+#: Rows of entPhysicalClass walked looking for chassis (a stack of big
+#: switches has a few hundred parts).
+ENTITY_LIMIT = 600
+#: Where else a serial is, tried in turn when ENTITY-MIB has none:
+#: (serial OID, model OID or None).
+SERIAL_OIDS: tuple[tuple[tuple[int, ...], tuple[int, ...] | None], ...] = (
+    # Printer-MIB prtGeneralSerialNumber; HOST-RESOURCES hrDeviceDescr.1.
+    ((1, 3, 6, 1, 2, 1, 43, 5, 1, 1, 17, 1), (1, 3, 6, 1, 2, 1, 25, 3, 2, 1, 3, 1)),
+    # MikroTik mtxrSerialNumber; mtxrBoardName.
+    ((1, 3, 6, 1, 4, 1, 14988, 1, 1, 7, 3, 0), (1, 3, 6, 1, 4, 1, 14988, 1, 1, 7, 8, 0)),
+    # Fortinet fnSysSerial.
+    ((1, 3, 6, 1, 4, 1, 12356, 100, 1, 1, 1, 0), None),
+    # Synology serialNumber; modelName.
+    ((1, 3, 6, 1, 4, 1, 6574, 1, 5, 2, 0), (1, 3, 6, 1, 4, 1, 6574, 1, 5, 1, 0)),
+    # Old Cisco IOS chassisId.
+    ((1, 3, 6, 1, 4, 1, 9, 3, 6, 3, 0), None),
+)
+#: Shown for Serial when no place above has one.
+NO_SERIAL = "(not given over SNMP)"
+
 _GET_REQUEST = 0xA0
+_GET_NEXT_REQUEST = 0xA1
 _GET_RESPONSE = 0xA2
 _IP_ADDRESS, _COUNTER32, _GAUGE32, _TIMETICKS, _COUNTER64 = 0x40, 0x41, 0x42, 0x43, 0x46
 _NO_VALUE = {0x80: "(no such object)", 0x81: "(no such instance)", 0x82: "(end of MIB view)"}
@@ -55,13 +86,13 @@ class SnmpResult:
 
 
 def build_get(request_id: int, oids: list[tuple[int, ...]], community: bytes,
-              version: int) -> bytes:
+              version: int, pdu_tag: int = _GET_REQUEST) -> bytes:
     binds = b"".join(
         ber.encode(ber.SEQUENCE, ber.encode(ber.OID, encode_oid(oid)) + ber.encode(ber.NULL, b""))
         for oid in oids
     )
     pdu = ber.encode(
-        _GET_REQUEST,
+        pdu_tag,
         ber.encode_int(request_id) + ber.encode_int(0) + ber.encode_int(0)
         + ber.encode(ber.SEQUENCE, binds),
     )
@@ -127,37 +158,126 @@ def parse_response(message: bytes, request_id: int) -> tuple[int, list[tuple[tup
     return ber.decode_int(message, err_start, err_end), binds
 
 
-def _ask(ip: str, community: str, version: int, timeout: float, port: int) -> SnmpResult:
-    result = SnmpResult(ip=ip, community=community, version=version)
-    oids = [oid for _, oid in SYSTEM_OIDS]
-    labels = {oid: label for label, oid in SYSTEM_OIDS}
-    started = time.monotonic()
+def _exchange(sock: socket.socket, oids: list[tuple[int, ...]], community: str, version: int,
+              attempts: int = ATTEMPTS, pdu_tag: int = _GET_REQUEST):
+    """(error status, binds, seconds taken) for one request, or None when
+    nothing answers in `attempts` tries."""
+    for _ in range(attempts):
+        request_id = random.randrange(1, 1 << 31)
+        started = time.monotonic()
+        sock.send(build_get(request_id, oids, community.encode(), version, pdu_tag))
+        try:
+            while True:
+                try:
+                    answer = parse_response(sock.recv(65535), request_id)
+                except (ValueError, IndexError):
+                    continue  # garbled; wait for a proper reply
+                if answer is not None:
+                    return (*answer, time.monotonic() - started)
+        except socket.timeout:
+            continue
+    return None
+
+
+def _value(sock: socket.socket, oid: tuple[int, ...], community: str, version: int,
+           pdu_tag: int = _GET_REQUEST) -> tuple[tuple[int, ...], str] | None:
+    """(OID, text) of one GET / GETNEXT, None when there's no such value."""
+    answer = _exchange(sock, [oid], community, version, 1, pdu_tag)
+    if answer is None or answer[0] or not answer[1]:
+        return None
+    found, tag, raw = answer[1][0]
+    return (found, format_value(tag, raw)) if tag not in _NO_VALUE else None
+
+
+def _serial_model(sock: socket.socket, community: str, version: int) -> tuple[str, str]:
+    """(serial, model) from ENTITY-MIB, else SERIAL_OIDS; "" for unknown.
+    A stack gives each member's serial (and its models), comma-separated."""
+    serials, models = [], []
+    oid = ENT_CLASS
+    for _ in range(ENTITY_LIMIT):
+        step = _value(sock, oid, community, version, _GET_NEXT_REQUEST)
+        if step is None or step[0][:len(ENT_CLASS)] != ENT_CLASS or step[0] <= oid:
+            break
+        oid, kind = step
+        if kind != CLASS_CHASSIS:
+            continue
+        index = oid[len(ENT_CLASS):]
+        serial = _value(sock, ENT_SERIAL + index, community, version)
+        if serial and serial[1]:
+            serials.append(serial[1])
+            model = _value(sock, ENT_MODEL + index, community, version)
+            if model and model[1] and model[1] not in models:
+                models.append(model[1])
+    if serials:
+        return ", ".join(serials), ", ".join(models)
+    oid = ENT_SERIAL
+    for _ in range(WALK_LIMIT):
+        step = _value(sock, oid, community, version, _GET_NEXT_REQUEST)
+        if step is None or step[0][:len(ENT_SERIAL)] != ENT_SERIAL or step[0] <= oid:
+            break
+        oid, serial = step
+        if serial:
+            model = _value(sock, ENT_MODEL + oid[len(ENT_SERIAL):], community, version)
+            return serial, model[1] if model else ""
+    for serial_oid, model_oid in SERIAL_OIDS:
+        found = _value(sock, serial_oid, community, version)
+        if found and found[1]:
+            model = _value(sock, model_oid, community, version) if model_oid else None
+            return found[1], model[1] if model else ""
+    return "", ""
+
+
+def _hardware(sock: socket.socket, community: str, version: int) -> list[tuple[str, str]]:
+    """[("Serial", …), ("Model", …)] for the result window."""
+    serial, model = _serial_model(sock, community, version)
+    return [("Serial", serial or NO_SERIAL)] + ([("Model", model)] if model else [])
+
+
+def lookup_serial(ip: str, communities: list[str], timeout: float = 1.0,
+                  port: int = SNMP_PORT) -> tuple[str, str] | None:
+    """(serial, model) of `ip` for the grid ("" when it has none), from the
+    first community and version (v2c, then v1) that answers; None when SNMP
+    doesn't answer at all."""
+    probe = [(1, 3, 6, 1, 2, 1, 1, 2, 0)]  # sysObjectID: is anyone there?
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.settimeout(timeout)
             sock.connect((ip, port))
-            for _ in range(ATTEMPTS):
-                request_id = random.randrange(1, 1 << 31)
-                started = time.monotonic()
-                sock.send(build_get(request_id, oids, community.encode(), version))
-                try:
-                    while True:
-                        try:
-                            answer = parse_response(sock.recv(65535), request_id)
-                        except (ValueError, IndexError):
-                            continue  # garbled; wait for a proper reply
-                        if answer is not None:
-                            break
-                except socket.timeout:
-                    continue
-                result.elapsed_ms = (time.monotonic() - started) * 1000
-                status, binds = answer
+            for community in communities:
+                for version in (VERSION_2C, VERSION_1):
+                    answer = _exchange(sock, probe, community, version, attempts=1)
+                    if answer is not None and not answer[0]:
+                        return _serial_model(sock, community, version)
+    except OSError:  # closed port (ICMP unreachable), no route
+        return None
+    return None
+
+
+def _ask(ip: str, community: str, version: int, timeout: float, port: int) -> SnmpResult:
+    result = SnmpResult(ip=ip, community=community, version=version)
+    oids = [oid for _, oid in SYSTEM_OIDS]
+    labels = {oid: label for label, oid in SYSTEM_OIDS}
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(timeout)
+            sock.connect((ip, port))
+            answer = _exchange(sock, oids, community, version)
+            if answer is not None:
+                status, binds, seconds = answer
+                result.elapsed_ms = seconds * 1000
                 if status:
                     result.error = f"The agent answered with an error: {_ERRORS.get(status, status)}"
                     return result
                 result.ok = True
                 result.values = [(labels.get(oid, ".".join(map(str, oid))), format_value(tag, raw))
                                  for oid, tag, raw in binds]
+                # The extra lookups shouldn't wait as long on an agent that
+                # just drops what it doesn't know.
+                sock.settimeout(min(timeout, 1.0))
+                try:
+                    result.values += _hardware(sock, community, version)
+                except OSError:
+                    pass  # the system group answered: that's the test passed
                 return result
     except ConnectionRefusedError:
         result.error = "Port UDP 161 is closed (ICMP port unreachable): SNMP is not running"

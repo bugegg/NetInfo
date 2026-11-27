@@ -31,7 +31,9 @@ from . import dns_ptr
 from . import hostname as hostname_lookup
 from . import netbios
 from . import port_scan
+from . import snmp
 from . import snmp_arp
+from . import snmp_test
 
 #: Reverse-DNS/dscacheutil calls, and forward lookups for every IP behind a
 #: name, are I/O-bound (waiting on a socket or a subprocess), so a thread
@@ -60,6 +62,7 @@ class DeviceInfoJob:
     needs_dns_name: bool = False
     needs_ports: bool = False
     needs_all_ips: bool = False
+    needs_serial: bool = False
 
 
 @dataclass(slots=True)
@@ -86,6 +89,15 @@ class DeviceInfoResult:
     #: one that failed to resolve — all_ips_looked_up distinguishes those.
     all_ips: list[str] = field(default_factory=list)
     all_ips_looked_up: bool = False
+    #: Serial number and model over SNMP; serial_looked_up once it was asked.
+    serial: str = ""
+    model: str = ""
+    serial_looked_up: bool = False
+
+
+def lookup_serial(ip: str, communities: list[str]) -> tuple[str, str] | None:
+    """(serial, model) over SNMP, None when it doesn't answer (tests stub it)."""
+    return snmp_test.lookup_serial(ip, communities)
 
 
 def _is_literal_ip(host: str) -> bool:
@@ -155,6 +167,7 @@ def resolve_batch(
     dns_name_jobs: dict[int, str] = {}
     port_jobs: dict[int, str] = {}
     all_ips_jobs: dict[int, str] = {}
+    serial_jobs: dict[int, str] = {}
 
     for job in jobs:
         mac = job.known_mac or (arp.lookup(job.ip) if job.ip else "")
@@ -167,6 +180,8 @@ def resolve_batch(
             port_jobs[job.key] = job.ip
         if job.needs_all_ips:
             all_ips_jobs[job.key] = job.host
+        if job.needs_serial and job.ip:
+            serial_jobs[job.key] = job.ip
 
     def fill_vendors() -> None:
         for result in results.values():
@@ -203,6 +218,13 @@ def resolve_batch(
         servers = dns_ptr.system_nameservers()  # once for the whole batch
         name_jobs += [(key, ip, "dns_name", lambda ip: dns_ptr.lookup(ip, servers))
                       for key, ip in dns_name_jobs.items()]
+    if serial_jobs:
+        communities = [c.decode() for c in snmp.communities()]
+
+        def serial_lookup(ip: str) -> tuple[str, str] | None:
+            return lookup_serial(ip, communities)
+
+        name_jobs += [(key, ip, "serial", serial_lookup) for key, ip in serial_jobs.items()]
     name_pool = None
     future_to_job = {}
     if name_jobs:
@@ -256,6 +278,14 @@ def resolve_batch(
                     name = future.result() or ""
                 except Exception:
                     name = ""
+                if field_name == "serial":
+                    result = results[key]
+                    result.serial, result.model = name or ("", "")
+                    result.serial_looked_up = bool(name)  # SNMP answered
+                    name = result.serial
+                    if name:
+                        progress()
+                    continue
                 setattr(results[key], field_name, name)
                 if name:
                     progress()

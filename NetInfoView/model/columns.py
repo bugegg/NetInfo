@@ -83,6 +83,15 @@ class Column:
         return self.value(entry)
 
 
+def typed_name(host: str) -> str:
+    """`host` when it's a name rather than an IP address, else ""."""
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return host
+    return ""
+
+
 COLUMNS: tuple[Column, ...] = (
     Column("host_name", "Host Name", 150, False, lambda e: e.display_name,
            sort_value=lambda e: ip_aware_key(e.host)),
@@ -93,9 +102,13 @@ COLUMNS: tuple[Column, ...] = (
     Column("reply_ip", "Reply IP Address", 120, False, lambda e: e.reply_ip,
            sort_value=lambda e: ip_aware_key(e.reply_ip)),
     Column("mac_address", "MAC Address", 130, False, lambda e: e.mac_address),
-    Column("hostname", "Hostname", 160, False, lambda e: e.hostname),
+    # The name found on the network, else the name the host was added by
+    # (the grid hides Host Name, so a name that doesn't resolve still shows).
+    Column("hostname", "Hostname", 160, False, lambda e: e.hostname or typed_name(e.host)),
     Column("dns_name", "DNS Name", 180, False, lambda e: e.dns_name),
     Column("vendor", "Vendor", 160, False, lambda e: e.vendor),
+    Column("serial", "Serial", 140, False, lambda e: e.serial),
+    Column("model", "Model", 150, False, lambda e: e.model),
     Column("open_ports", "Open Ports", 120, False, lambda e: e.open_ports,
            lambda e: ", ".join(str(p) for p in e.open_ports)),
     Column("device_type", "Device Type (Guess)", 220, False, lambda e: e.device_type_guess),

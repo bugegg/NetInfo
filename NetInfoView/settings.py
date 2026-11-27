@@ -77,6 +77,8 @@ class Settings:
     dns_check_ip: str = ""
     #: DNS Check's DNS server ("" for the system's).
     dns_check_server: str = ""
+    #: How it's asked: "auto", "DoT", "DoH" or "plain" (dns_check.PROTOCOLS).
+    dns_check_protocol: str = "auto"
 
     # -- grid ----------------------------------------------------------------
     display_mode: DisplayMode = DisplayMode.ALL

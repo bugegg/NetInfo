@@ -49,6 +49,11 @@ class HostEntry:
     all_resolved_ips: list[str] = field(default_factory=list)
     #: True once the all-IPs lookup has actually run — see ports_scanned.
     all_ips_resolved: bool = False
+    #: Serial number and model from SNMP (ping/snmp_test.lookup_serial).
+    serial: str = ""
+    model: str = ""
+    #: True once SNMP was asked for them — see ports_scanned.
+    serial_looked_up: bool = False
     #: Path MTU in bytes from the last Check MTU, None if not known.
     mtu: int | None = None
     #: True when Check MTU ran but the host didn't answer at all.

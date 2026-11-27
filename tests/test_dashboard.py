@@ -292,6 +292,7 @@ def test_right_click_menu_keeps_only_host_actions_and_view_toggles(window):
         window.action_graph.text(),
         window.action_repeat_ping.text(),
         window.action_trace_mtu.text(), window.action_net_path.text(),
+        window.action_dns_check_host.text(),
         window.action_route_monitor.text(),
         window.action_ssh.text(), window.action_telnet.text(),
         window.action_open_http.text(), window.action_open_https.text(),
@@ -359,7 +360,7 @@ def test_default_column_order(window):
     titles = [window._proxy.headerData(i, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
               for i in shown]
     assert titles == ['Status', 'IP address', 'Hostname', 'DNS Name', 'MAC address', 'Vendor',
-                      'MTU', 'Total', 'Succeed', 'Failed', 'Latency', 'Last Failed On']
+                      'Serial', 'Model', 'MTU', 'Total', 'Succeed', 'Failed', 'Latency', 'Last Failed On']
 
 
 def test_sidebar_footer_shows_live_computer_name_and_ip(window, monkeypatch):
@@ -449,3 +450,38 @@ def test_busy_counts_pinging_and_worker_threads(window, monkeypatch):
     assert not d.busy()
     monkeypatch.setattr(threads, "any_running", lambda: True)
     assert d.busy()
+
+
+def test_right_click_dns_check_checks_the_selected_host(window, monkeypatch):
+    from NetInfoView.ui.dns_check_window import DnsCheckWindow
+    started = []
+    monkeypatch.setattr(DnsCheckWindow, 'start', lambda self: started.append(self.domain.text()))
+    entries = _entries_with_statuses(window, 'mail.example.com\n49.229.24.133\nrouter')
+    entries[2].ip_address = '10.0.0.1'
+    window._model.set_entries(entries)
+    for row in range(3):  # the table's sort order decides which row is which
+        window._table.clearSelection()
+        window._table.selectRow(row)
+        dns_window = window.dns_check_host()
+    assert sorted(started) == ['10.0.0.1', '49.229.24.133', 'mail.example.com']
+    dns_window.close()
+
+
+def test_a_host_added_by_name_shows_it_even_when_unresolved(window):
+    from NetInfoView.model.columns import COLUMNS
+    hostname = next(c for c in COLUMNS if c.key == 'hostname')
+    entries = _entries_with_statuses(window, 'meyer-mat.com\n49.229.24.133')
+    assert hostname.value(entries[0]) == 'meyer-mat.com'
+    assert hostname.value(entries[1]) in ('', None)
+    entries[0].hostname = 'web01'
+    assert hostname.value(entries[0]) == 'web01'
+
+
+def test_search_finds_serial_and_model(window):
+    entries = _entries_with_statuses(window, '10.0.0.1\n10.0.0.2')
+    entries[0].serial, entries[0].model = 'JAE2419174K', 'C9200L-24T-4X'
+    window._proxy.set_search_text('jae2419174k')
+    assert window._proxy.rowCount() == 1
+    window._proxy.set_search_text('C9200L')
+    assert window._proxy.rowCount() == 1
+    window._proxy.set_search_text('')

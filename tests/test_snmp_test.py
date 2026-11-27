@@ -26,7 +26,7 @@ def agent():
     community "s3cret" and only in the versions in `versions`."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("127.0.0.1", 0))
-    state = {"versions": {0, 1}, "seen": []}
+    state = {"versions": {0, 1}, "seen": [], "mib": dict(SYSTEM)}
 
     def serve():
         while True:
@@ -35,7 +35,7 @@ def agent():
             except OSError:
                 return
             _, start, end = ber.read(message)
-            (_, v_start, v_end), (_, c_start, c_end), (_, pdu_start, pdu_end) = list(
+            (_, v_start, v_end), (_, c_start, c_end), (pdu_tag, pdu_start, pdu_end) = list(
                 ber.children(message, start, end))
             version = ber.decode_int(message, v_start, v_end)
             state["seen"].append(version)
@@ -48,7 +48,9 @@ def agent():
             for _, bind_start, bind_end in ber.children(message, b_start, b_end):
                 (_, o_start, o_end), _ = ber.children(message, bind_start, bind_end)
                 oid = decode_oid(message[o_start:o_end])
-                tag, value = SYSTEM.get(oid, (0x80, b""))
+                if pdu_tag == 0xA1:  # GETNEXT: the first OID after it
+                    oid = next((o for o in sorted(state["mib"]) if o > oid), oid)
+                tag, value = state["mib"].get(oid, (0x80 if pdu_tag == 0xA0 else 0x82, b""))
                 binds += ber.encode(ber.SEQUENCE, ber.encode(ber.OID, encode_oid(oid)) + ber.encode(tag, value))
             pdu = ber.encode(0xA2, ber.encode_int(request_id) + ber.encode_int(0) + ber.encode_int(0)
                              + ber.encode(ber.SEQUENCE, binds))
@@ -122,3 +124,74 @@ def test_use_this_community_saves_it(window, monkeypatch):
     test_window.save_button.click()
     assert window.settings.snmp_community == "s3cret" and saved
     test_window.close()
+
+
+ENT = (1, 3, 6, 1, 2, 1, 47, 1, 1, 1, 1)
+
+
+def test_serial_and_model_from_entity_mib(agent):
+    agent["mib"].update({
+        ENT + (11, 1): (ber.OCTET_STRING, b""),  # a part with no serial is skipped
+        ENT + (11, 2): (ber.OCTET_STRING, b"FOC1234X0AB"),
+        ENT + (13, 2): (ber.OCTET_STRING, b"WS-C2960X-24TS-L"),
+    })
+    result = snmp_test.query_system("127.0.0.1", "s3cret", port=agent["port"], timeout=0.5)
+    values = dict(result.values)
+    assert values["Serial"] == "FOC1234X0AB" and values["Model"] == "WS-C2960X-24TS-L"
+    assert "Serial:" in snmp_test.format_result(result)
+
+
+def test_serial_from_a_vendor_mib(agent):
+    agent["mib"][(1, 3, 6, 1, 4, 1, 14988, 1, 1, 7, 3, 0)] = (ber.OCTET_STRING, b"HD3088ABC12")
+    agent["mib"][(1, 3, 6, 1, 4, 1, 14988, 1, 1, 7, 8, 0)] = (ber.OCTET_STRING, b"RB5009UG+S+")
+    values = dict(snmp_test.query_system("127.0.0.1", "s3cret", port=agent["port"],
+                                         timeout=0.5).values)
+    assert values["Serial"] == "HD3088ABC12" and values["Model"] == "RB5009UG+S+"
+
+
+def test_no_serial_says_so(agent):
+    values = dict(snmp_test.query_system("127.0.0.1", "s3cret", port=agent["port"],
+                                         timeout=0.5).values)
+    assert values["Serial"] == snmp_test.NO_SERIAL and "Model" not in values
+
+
+def test_lookup_serial_for_the_grid(agent):
+    agent["mib"][ENT + (11, 1)] = (ber.OCTET_STRING, b"SN-001")
+    assert snmp_test.lookup_serial("127.0.0.1", ["public", "s3cret"], 0.3,
+                                   agent["port"]) == ("SN-001", "")
+    assert snmp_test.lookup_serial("127.0.0.1", ["public"], 0.2, agent["port"]) is None
+
+
+def test_device_sweep_fills_serial(monkeypatch):
+    from NetInfoView.ping import device_info
+    monkeypatch.setattr(device_info.arp, "lookup", lambda ip: "00:11:22:33:44:55")
+    monkeypatch.setattr(device_info, "lookup_serial",
+                        lambda ip, communities: ("SN-9", "Model-X") if ip == "10.0.0.1" else None)
+
+    class Vendors:
+        def lookup(self, mac):
+            return "Acme"
+    jobs = [device_info.DeviceInfoJob(key=1, ip="10.0.0.1", needs_serial=True),
+            device_info.DeviceInfoJob(key=2, ip="10.0.0.2", needs_serial=True)]
+    results = {r.key: r for r in device_info.resolve_batch(jobs, Vendors())}
+    assert (results[1].serial, results[1].model, results[1].serial_looked_up) == (
+        "SN-9", "Model-X", True)
+    assert not results[2].serial_looked_up  # no SNMP: asked again next sweep
+
+
+def test_a_stack_gives_every_members_serial(agent):
+    agent["mib"].update({
+        ENT + (5, 1): (ber.INTEGER, b"\x0b"),  # stack(11)
+        ENT + (5, 1000): (ber.INTEGER, b"\x03"),  # chassis: switch 1
+        ENT + (5, 1001): (ber.INTEGER, b"\x09"),  # module
+        ENT + (5, 2000): (ber.INTEGER, b"\x03"),  # chassis: switch 2
+        ENT + (11, 1000): (ber.OCTET_STRING, b"JAE1111AAAA"),
+        ENT + (11, 1001): (ber.OCTET_STRING, b"MOD-SN"),
+        ENT + (11, 2000): (ber.OCTET_STRING, b"JAE2222BBBB"),
+        ENT + (13, 1000): (ber.OCTET_STRING, b"C9200L-24T-4X"),
+        ENT + (13, 2000): (ber.OCTET_STRING, b"C9200L-24T-4X"),
+    })
+    values = dict(snmp_test.query_system("127.0.0.1", "s3cret", port=agent["port"],
+                                         timeout=0.5).values)
+    assert values["Serial"] == "JAE1111AAAA, JAE2222BBBB"
+    assert values["Model"] == "C9200L-24T-4X"

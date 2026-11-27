@@ -40,6 +40,19 @@ ENCRYPTED_DNS = {
     "208.67.222.222": ("", "https://doh.opendns.com/dns-query"),
     "208.67.220.220": ("", "https://doh.opendns.com/dns-query"),
 }
+#: How queries go out: "auto" tries DoT, then DoH, then plain DNS (for a
+#: server in ENCRYPTED_DNS); the others use only that protocol.
+PROTOCOLS = ("auto", "DoT", "DoH", "plain")
+PROTOCOL_LABELS = {"auto": "Auto", "DoT": "DoT", "DoH": "DoH", "plain": "Cleartext"}
+
+
+def protocols_for(server: str) -> tuple[str, ...]:
+    """The PROTOCOLS `server` takes: DoT and DoH only for ENCRYPTED_DNS."""
+    tls_name, url = ENCRYPTED_DNS.get(server, ("", ""))
+    return tuple(p for p in PROTOCOLS if p in ("auto", "plain") or (p == "DoT" and tls_name)
+                 or (p == "DoH" and url))
+
+
 #: An address no DNS server listens on (TEST-NET-2, RFC 5737): an answer
 #: from it means the network intercepts port 53.
 INTERCEPT_PROBE = "198.51.100.1"
@@ -78,12 +91,66 @@ IP_BLACKLISTS = (
     ("PSBL", "psbl.surriel.com"),
     ("UCEPROTECT L1", "dnsbl-1.uceprotect.net"),
     ("Mailspike", "bl.mailspike.net"),
+    # The rest of MXToolbox's public lists (those needing a key are left out).
+    ("0SPAM", "bl.0spam.org"),
+    ("0SPAM RBL", "rbl.0spam.org"),
+    ("Anonmails DNSBL", "spam.dnsbl.anonmails.de"),
+    ("Backscatterer", "ips.backscatterer.org"),
+    ("Blocklist.de", "bl.blocklist.de"),
+    ("Cymru Bogons", "bogons.cymru.com"),
+    ("DAN TOR", "tor.dan.me.uk"),
+    ("DAN TOR Exit", "torexit.dan.me.uk"),
+    ("DRMX", "bl.drmx.org"),
+    ("DroneBL", "dnsbl.dronebl.org"),
+    ("Fabel Sources", "spamsources.fabel.dk"),
+    ("Hostkarma Black", "hostkarma.junkemailfilter.com"),
+    ("IMP Spam", "spamrbl.imp.ch"),
+    ("IMP Worm", "wormrbl.imp.ch"),
+    ("InterServer", "rbl.interserver.net"),
+    ("JIPPG", "mail-abuse.blacklist.jippg.org"),
+    ("KEMPTBL", "dnsbl.kempt.net"),
+    ("Konstant", "bl.konstant.no"),
+    ("LashBack", "ubl.unsubscore.com"),
+    ("Mailspike Z", "z.mailspike.net"),
+    ("MSRBL Phishing", "phishing.rbl.msrbl.net"),
+    ("MSRBL Spam", "spam.rbl.msrbl.net"),
+    ("Nether Relays", "relays.nether.net"),
+    ("Nether Unsure", "unsure.nether.net"),
+    ("NoSolicitado", "bl.nosolicitado.org"),
+    ("RATS Dyna", "dyna.spamrats.com"),
+    ("RATS NoPtr", "noptr.spamrats.com"),
+    ("RATS Spam", "spam.spamrats.com"),
+    ("RBL JP", "virus.rbl.jp"),
+    ("s5h.net", "all.s5h.net"),
+    ("Schulte", "rbl.schulte.org"),
+    ("SEM Backscatter", "backscatter.spameatingmonkey.net"),
+    ("SEM Black", "bl.spameatingmonkey.net"),
+    ("ServicesNet", "korea.services.net"),
+    ("Suomispam", "bl.suomispam.net"),
+    ("SWINOG", "dnsrbl.swinog.ch"),
+    ("TRIUMF", "rbl2.triumf.ca"),
+    ("Truncate", "truncate.gbudb.net"),
+    ("UCEPROTECT L2", "dnsbl-2.uceprotect.net"),
+    ("UCEPROTECT L3", "dnsbl-3.uceprotect.net"),
+    ("Woody's SMTP", "blacklist.woody.ch"),
+    ("ZapBL", "dnsbl.zapbl.net"),
+    ("SPFBL", "dnsbl.spfbl.net"),
 )
+#: Lists whose other answers aren't a listing: Hostkarma's 127.0.0.1 is its
+#: whitelist; SPFBL's 127.0.0.4 just marks an end-user (dynamic) address.
+LISTED_ANSWERS = {"hostkarma.junkemailfilter.com": {"127.0.0.2"},
+                  "dnsbl.spfbl.net": {"127.0.0.2", "127.0.0.3"}}
 #: A detail line starting with one of these marks and a space reports one
 #: item's own result; the window draws the matching status icon in its place.
 DETAIL_MARKS = {"✓": PASS, "✗": FAIL, "!": NOTICE, "–": INPUT}
 #: Domain blacklists asked about the domain itself.
-DOMAIN_BLACKLISTS = (("Spamhaus DBL", "dbl.spamhaus.org"), ("SURBL", "multi.surbl.org"))
+DOMAIN_BLACKLISTS = (
+    ("Spamhaus DBL", "dbl.spamhaus.org"),
+    ("SURBL", "multi.surbl.org"),
+    ("SEM Fresh", "fresh.spameatingmonkey.net"),  # newly registered domains
+    ("SEM URI", "uribl.spameatingmonkey.net"),
+    ("SEM URIRED", "urired.spameatingmonkey.net"),
+)
 
 _HEADER = struct.Struct("!HHHHHH")
 _RR = struct.Struct("!HHIH")
@@ -167,10 +234,10 @@ def parse_ip(text: str) -> str:
 
 
 def domain_for_ip(ip: str, server: str = "", timeout: float = DEFAULT_TIMEOUT,
-                  port: int = DNS_PORT) -> tuple[str, str]:
+                  port: int = DNS_PORT, protocol: str = "auto") -> tuple[str, str]:
     """(PTR name, its registered domain) for `ip`; ("", "") when it has no
     PTR record or the name isn't a domain."""
-    resolver = Resolver([server] if server else None, timeout, port)
+    resolver = Resolver([server] if server else None, timeout, port, protocol)
     try:
         names = resolver.values(ipaddress.ip_address(ip).reverse_pointer, "PTR")
     except DnsError:
@@ -364,10 +431,12 @@ class Resolver:
     DNS-over-HTTPS, falling back to plain DNS (ENCRYPTED_DNS)."""
 
     def __init__(self, servers: list[str] | None = None, timeout: float = DEFAULT_TIMEOUT,
-                 port: int = DNS_PORT) -> None:
+                 port: int = DNS_PORT, protocol: str = "auto") -> None:
         self.servers = [s for s in (servers or []) if s] or system_nameservers()
         self.timeout = timeout
         self.port = port
+        #: One of PROTOCOLS.
+        self.protocol = protocol if protocol in PROTOCOLS else "auto"
         self._cache: dict[tuple[str, str], Response] = {}
         #: How the last answer came: "DoT", "DoH" or "UDP/TCP".
         self.transport = ""
@@ -384,7 +453,18 @@ class Resolver:
 
     def _ask(self, name: str, rtype: str, server: str) -> Response:
         encrypted = ENCRYPTED_DNS.get(server) if self.port == DNS_PORT else None
-        if encrypted:
+        if self.protocol in ("DoT", "DoH"):
+            # Only the chosen protocol: an error, not plain DNS, when it fails.
+            tls_name, url = encrypted or ("", "")
+            if self.protocol == "DoT" and tls_name:
+                response = query_tls(name, rtype, server, tls_name, self.timeout)
+            elif self.protocol == "DoH" and url:
+                response = query_https(name, rtype, url, self.timeout)
+            else:
+                raise DnsError(f"{server} doesn't take {self.protocol}")
+            self.transport = self.protocol
+            return response
+        if encrypted and self.protocol == "auto":
             tls_name, url = encrypted
             broken = self._broken.setdefault(server, set())
             for transport, ask in (("DoT", lambda: query_tls(name, rtype, server, tls_name,
@@ -1097,7 +1177,11 @@ def _dnsbl(name: str, resolver: Resolver) -> tuple[list[str], bool]:
         refused += [a for a in answers if a == "127.0.0.1"]
     if refused:
         return [], True
-    return [a for a in answers if a.startswith("127.")], False
+    listed = [a for a in answers if a.startswith("127.")]
+    for zone, codes in LISTED_ANSWERS.items():
+        if name.endswith("." + zone):
+            listed = [a for a in listed if a in codes]
+    return listed, False
 
 
 def check_blacklist(domain: str, resolver: Resolver, ip: str = "") -> CheckResult:
@@ -1125,7 +1209,7 @@ def check_blacklist(domain: str, resolver: Resolver, ip: str = "") -> CheckResul
             for address in addresses for name, zone in IP_BLACKLISTS]
     domain_lists = DOMAIN_BLACKLISTS if domain else ()
     jobs += [(domain, name, f"{domain}.{zone}") for name, zone in domain_lists]
-    with ThreadPoolExecutor(max_workers=16) as pool:
+    with ThreadPoolExecutor(max_workers=32) as pool:
         answers = list(pool.map(lambda job: _dnsbl(job[2], resolver), jobs))
     listed = [f"{target} on {name} ({', '.join(found)})"
               for (target, name, _), (found, _) in zip(jobs, answers) if found]
@@ -1148,6 +1232,7 @@ def check_blacklist(domain: str, resolver: Resolver, ip: str = "") -> CheckResul
             else:
                 mark, status = "✓", "Passed"
             details.append(f"{mark} {name} ({kind}): {status}")
+    details.sort(key=lambda line: "✗!".find(line[0]) % 3)  # problems first
     if refused:
         details.append(f"No answer from {', '.join(refused)} (some lists refuse queries "
                        "from public DNS such as 8.8.8.8).")
@@ -1241,10 +1326,10 @@ def parse_selectors(text: str) -> list[str]:
 
 def check_domain(domain: str, server: str = "", selectors: list[str] | None = None,
                  ip: str = "", timeout: float = DEFAULT_TIMEOUT, port: int = DNS_PORT,
-                 on_result=None) -> Report:
+                 on_result=None, protocol: str = "auto") -> Report:
     """Every check for `domain`, run side by side. `on_result` is called
     with each CheckResult as soon as it's ready (from a worker thread)."""
-    resolver = Resolver([server] if server else None, timeout, port)
+    resolver = Resolver([server] if server else None, timeout, port, protocol)
     try:
         missing = resolver.resolve(domain, "NS").rcode == RCODE_NXDOMAIN
     except DnsError:
@@ -1270,17 +1355,17 @@ IP_CHECKS = ("ptr", "blacklist")
 
 def check_ip(ip: str, server: str = "", selectors: list[str] | None = None,
              timeout: float = DEFAULT_TIMEOUT, port: int = DNS_PORT,
-             on_result=None) -> Report:
+             on_result=None, protocol: str = "auto") -> Report:
     """An IP typed in place of a domain. The domain its PTR names gets every
     check, with `ip` as the sending IP; when there's no PTR, or it names a
     domain that doesn't exist, the IP's own checks (PTR, blocklists) still run."""
-    name, domain = domain_for_ip(ip, server, timeout, port)
+    name, domain = domain_for_ip(ip, server, timeout, port, protocol)
     if domain:
-        report = check_domain(domain, server, selectors, ip, timeout, port, on_result)
+        report = check_domain(domain, server, selectors, ip, timeout, port, on_result, protocol)
         if report.exists:
             report.ip, report.ptr_name = ip, name
             return report
-    resolver = Resolver([server] if server else None, timeout, port)
+    resolver = Resolver([server] if server else None, timeout, port, protocol)
     found: dict[str, CheckResult] = {}
     with ThreadPoolExecutor(max_workers=len(IP_CHECKS)) as pool:
         futures = [pool.submit(run_check, key, "", resolver, selectors, ip) for key in IP_CHECKS]

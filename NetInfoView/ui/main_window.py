@@ -399,6 +399,13 @@ class MainWindow(QMainWindow):
         )
         self.action_dns_check.triggered.connect(self.dns_check)
 
+        # The same window, checking the selected host (right-click menu).
+        self.action_dns_check_host = QAction("DNS Check", self)
+        self.action_dns_check_host.setToolTip(
+            "Check the selected host's DNS: its domain's records, or an IP's PTR and blocklists"
+        )
+        self.action_dns_check_host.triggered.connect(self.dns_check_host)
+
         self.action_route_monitor = QAction("Ping &Monitor", self)
         self.action_route_monitor.setShortcut(QKeySequence("Ctrl+R"))
         self.action_route_monitor.setToolTip(
@@ -523,6 +530,7 @@ class MainWindow(QMainWindow):
         self._table.addAction(self.action_repeat_ping)
         self._table.addAction(self.action_trace_mtu)
         self._table.addAction(self.action_net_path)
+        self._table.addAction(self.action_dns_check_host)
         self._table.addAction(self.action_route_monitor)
         self._add_table_separator()
         self._table.addAction(self.action_ssh)
@@ -997,6 +1005,22 @@ class MainWindow(QMainWindow):
         window.domain.setFocus()
         return window
 
+    def dns_check_host(self) -> DnsCheckWindow:
+        """DNS Check the first selected host: its name when that's a domain,
+        else its IP; just the window when nothing is selected."""
+        window = self.dns_check()
+        entry = next((e for e in self._selected_entries() if e.host or e.ip_address), None)
+        if entry is None:
+            return window
+        from ..ping import dns_check as dns
+
+        name = entry.host.strip()
+        target = name if dns.parse_ip(name) or "." in name else entry.ip_address or name
+        if window._thread is None:  # not while a check is running
+            window.domain.setText(target)
+            window.start()
+        return window
+
     def port_scan(self) -> PortScanWindow:
         """Port Scan the first selected host (its common ports straight
         away), or wait for a host to be typed if none is selected."""
@@ -1272,7 +1296,7 @@ class MainWindow(QMainWindow):
             fully_resolved = (
                 entry.mac_address and entry.hostname and entry.dns_name and entry.vendor
                 and (entry.ports_scanned or not scan_ports)
-                and entry.all_ips_resolved
+                and entry.all_ips_resolved and entry.serial_looked_up
             )
             if fully_resolved:
                 continue  # done for good
@@ -1290,6 +1314,7 @@ class MainWindow(QMainWindow):
                     needs_dns_name=not entry.dns_name,
                     needs_ports=scan_ports and not entry.ports_scanned,
                     needs_all_ips=not entry.all_ips_resolved,
+                    needs_serial=not entry.serial_looked_up,
                 )
             )
 
@@ -1330,6 +1355,10 @@ class MainWindow(QMainWindow):
                 entry.open_ports = result.open_ports
                 entry.device_type_guess = result.device_type
                 touched = True
+            if result.serial_looked_up and not entry.serial_looked_up:
+                entry.serial_looked_up = True
+                entry.serial, entry.model = result.serial, result.model
+                touched = touched or bool(result.serial or result.model)
             if result.all_ips_looked_up and not entry.all_ips_resolved:
                 entry.all_ips_resolved = True
                 entry.all_resolved_ips = result.all_ips
